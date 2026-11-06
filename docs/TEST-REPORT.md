@@ -1,5 +1,87 @@
 # Test Report
 
+## Phase 2 — 2026-11-07
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+node dist/cli.js agent "Call get_jarvis_status exactly once. Then summarize the returned runtime information."
+node dist/cli.js health --json
+ollama ps
+nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader
+```
+
+### Actual results
+
+- `npm run typecheck` (`tsc --noEmit`): passed with no diagnostics.
+- `npm run lint` (`eslint .`): passed with no diagnostics.
+- `npm run format:check`: passed with `All matched files use Prettier code style!`.
+- `npm test` (`vitest run`):
+  - Vitest `v5.1.0`.
+  - 11 test files passed.
+  - 61 tests passed.
+  - Duration: 916 ms.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+- Build output included the Phase 2 modules:
+  - `dist/core/agent-loop.js`
+  - `dist/core/system-prompt.js`
+  - `dist/core/tool-registry.js`
+  - `dist/llm/ollama-client.js`
+  - `dist/tools/get-jarvis-status.js`
+- Live agent acceptance command exited `0` and printed:
+
+```text
+JARVIS runtime status:
+- **Application**: JARVIS v0.1.0
+- **Node.js**: 24.18.0 (Windows x64)
+- **Model**: qwen3.5:9b (context size: 4096)
+- **Status**: Operational and verified
+- **Timestamp**: 2026-11-06T21:00:07Z
+```
+
+- The live run used a real structured tool call, not a textual imitation.
+  - `logs/jarvis.log` recorded `tool.requested`, `tool.started`, and `tool.completed` for `get_jarvis_status`.
+  - The completed receipt had `status:success` and `verification:verified`, with `durationMs:1`.
+  - The second Ollama request contained four messages, including the tool result.
+  - The final `agent.completed` event recorded `rounds:2`, `toolCallCount:1`, `durationMs:8249`, and `status:success`.
+- `node dist/cli.js health --json`: exit code `0`; status `OK`; 8 checks; version `0.1.0`.
+- `ollama ps` after the live run:
+
+```text
+NAME          ID              SIZE      PROCESSOR    CONTEXT    RUNNER
+qwen3.5:9b    56671c2ab938    5.6 GB    100% GPU     4096       llamacpp
+```
+
+- `nvidia-smi` after the live run:
+
+```text
+NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6351 MiB, 0 %
+```
+
+### Coverage added
+
+- Ollama request shape: `stream:false`, `think:false`, context, temperature, prediction limit, and tool definitions.
+- Response mapping for content, tool calls, completion reason, and metrics.
+- Transient retry, non-retryable HTTP error, invalid response, timeout, and pre-cancelled request behavior.
+- Tool registration, duplicate/invalid definitions, argument validation, unknown tools, permissions, verification, timeout, and cancellation.
+- Agent loop success path, textual tool-call imitation rejection, round limit, call limit, repeated-call detection, tool failure propagation, output truncation, and cancellation.
+- Diagnostic tool deterministic output and verification failure.
+- Fake local HTTP server integration for a real request/response round trip with a structured tool call.
+- CLI agent success, failure, cancellation, missing message, and configuration failure behavior.
+- Existing Phase 1 regression coverage remains passing.
+
+### Notes
+
+- The live acceptance run loaded `qwen3.5:9b` on the RTX 4060 with 100% GPU processing and 4096 context.
+- The only registered tool is read-only. No filesystem, shell, browser, service, model-storage, or Git operation was performed by the agent.
+- Agent logs are written to `logs/jarvis.log` with console output disabled for the default runner.
+- The live run took 8.249 seconds from `agent.started` to `agent.completed`.
+
 ## Phase 1D — 2026-11-07
 
 ### Commands executed

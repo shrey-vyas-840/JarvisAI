@@ -1,5 +1,7 @@
 # Phase 1 Handoff
 
+> Historical document. Phase 1 was subsequently published, and Phase 2 is now complete. See `docs/PHASE-2-HANDOFF.md` for the current handoff and `docs/PHASE-3-HANDOFF.md` for the next plan.
+
 Current completed sub-stage: **1D — Read-only health diagnostics**
 Phase 1 status: **complete**
 Next phase status: **not approved**

@@ -107,3 +107,43 @@ Decision: make `runCli` asynchronous. The direct-execution path awaits it and as
 Reason: health and future network commands need to await work without blocking patterns, while CLI behavior remains testable through injected I/O and dependencies.
 
 Consequence: CLI tests must await `runCli`, and future commands should preserve the injected dependency pattern.
+
+## ADR-016 — Native Ollama client boundary
+
+Decision: keep all Ollama HTTP details in `src/llm/ollama-client.ts`. Send non-streaming `/api/chat` requests with `think:false`, validated context size, low temperature, and conservative prediction limits. Validate responses with Zod and expose typed errors and metrics.
+
+Reason: the agent loop should consume a small, testable interface rather than raw HTTP responses, and malformed model responses must fail explicitly.
+
+Consequence: model response-shape changes must be handled in the client schema. The client retries only transient network, timeout, 429, and 5xx failures.
+
+## ADR-017 — Registered-only tools with execution receipts
+
+Decision: execute only tools registered in `ToolRegistry`, validate arguments before execution, and return a typed receipt for every requested call. Tools declare permissions, timeouts, and optional verification.
+
+Reason: the model must not be able to invoke arbitrary code, and the runtime needs auditable evidence of what actually happened.
+
+Consequence: new tools must define a JSON Schema, a matching Zod schema, a permission, a timeout, and a verification check where the result is verifiable. Side-effecting tools will require an approval path before execution.
+
+## ADR-018 — Bounded agent loop
+
+Decision: cap the loop at 8 tool rounds, 12 tool calls, and 20,000 characters of tool output returned to the model. Execute tool calls sequentially and stop repeated identical calls.
+
+Reason: local models can loop or over-produce tool calls, and unbounded rounds increase latency, resource use, and unintended side effects.
+
+Consequence: limits are configurable through `AgentLoopOptions` for tests and future policy settings. Exceeding a limit produces an explicit `limit_reached` result rather than an ambiguous response.
+
+## ADR-019 — Read-only diagnostic acceptance tool
+
+Decision: make `get_jarvis_status` the first real tool. It returns actual runtime information and verifies its own output against the execution context.
+
+Reason: it proves the complete model → structured tool call → validated execution → tool result → model answer path without filesystem, browser, or command side effects.
+
+Consequence: Phase 3 should add capabilities through separate registered tools rather than expanding this diagnostic tool.
+
+## ADR-020 — Agent CLI logging and cancellation
+
+Decision: the default agent runner logs to the redacting file logger with console output disabled, and the CLI maps SIGINT to an aborted run with exit code `130`.
+
+Reason: agent logs are long-lived audit data, while the CLI should keep model output readable. Cancellation must not be reported as success.
+
+Consequence: future commands should preserve the separation between user-facing output and structured audit logs.

@@ -186,6 +186,84 @@ exit 0
 
 The health checks are read-only and safe to repeat.
 
+## 2026-11-07 — Phase 2 complete
+
+- Added a native Ollama `/api/chat` client in `src/llm/ollama-client.ts`.
+  - Non-streaming requests with `think:false`, `num_ctx:4096`, `temperature:0.2`, and conservative `num_predict`.
+  - Zod response validation and normalized messages, tool calls, completion data, and metrics.
+  - Timeout, cancellation, typed errors, and one retry for transient network/timeout/HTTP failures.
+- Added a registered-only tool system in `src/core/tool-registry.ts`.
+  - Unique names, descriptions, JSON Schema parameters, Zod argument validation, permissions, and timeouts.
+  - Execution receipts with success/failure/approval/timeout/cancelled status and verification status.
+  - Denied and approval-required tools do not execute.
+- Added a bounded agent loop in `src/core/agent-loop.ts`.
+  - Maximum 8 tool rounds, 12 tool calls, and 20,000 characters of tool output returned to the model.
+  - Sequential execution, cancellation, repeated-call detection, and explicit success/failure reporting.
+  - Structured events for agent start/completion/failure/cancellation, Ollama requests/responses, and tool lifecycle.
+- Added `src/core/system-prompt.ts` with tool-use and no-fabrication instructions.
+- Added `src/tools/get-jarvis-status.ts`, a read-only diagnostic tool with real output verification.
+- Extended `src/cli.ts` with `jarvis agent "<message>"`.
+  - Uses the configured model and context, redacting file logging, SIGINT cancellation, and exit codes.
+  - Preserves `version`, `health`, `health --json`, help, and aliases.
+- Added unit and integration tests for the Ollama client, tool registry, agent loop, diagnostic tool, and CLI agent command.
+- Added a fake local HTTP server integration test proving a real request/response round trip and a structured tool call.
+- Updated `docs/STATUS.md`, `docs/DECISIONS.md`, `docs/TEST-REPORT.md`, `README.md`, and created `docs/PHASE-2-HANDOFF.md` and `docs/PHASE-3-HANDOFF.md`.
+
+### Phase 2 verification
+
+```text
+npm run typecheck
+passed with no diagnostics
+
+npm run lint
+passed with no diagnostics
+
+npm run format:check
+All matched files use Prettier code style!
+
+npm test
+Test Files  11 passed (11)
+Tests       61 passed (61)
+
+npm run build
+passed
+
+node dist/cli.js agent "Call get_jarvis_status exactly once. Then summarize the returned runtime information."
+JARVIS runtime status:
+- **Application**: JARVIS v0.1.0
+- **Node.js**: 24.18.0 (Windows x64)
+- **Model**: qwen3.5:9b (context size: 4096)
+- **Status**: Operational and verified
+- **Timestamp**: 2026-11-06T21:00:07Z
+
+node dist/cli.js health --json
+status OK; 8 checks; exit code 0
+```
+
+Live execution evidence from `logs/jarvis.log`:
+
+```text
+tool.registered  get_jarvis_status, read-only, 5000 ms
+agent.started    maxToolRounds=8, maxToolCalls=12
+ollama.request   round 1, messageCount 2
+ollama.response  round 1, toolCallCount 1, evalCount 17
+tool.requested   get_jarvis_status, round 1, callIndex 0
+tool.started     get_jarvis_status
+tool.completed   status success, verification verified, durationMs 1
+ollama.request   round 2, messageCount 4
+ollama.response  round 2, toolCallCount 0, evalCount 97
+agent.completed  status success, rounds 2, toolCallCount 1, durationMs 8249
+```
+
+GPU observation after the acceptance run:
+
+```text
+NAME          ID              SIZE      PROCESSOR    CONTEXT    RUNNER
+qwen3.5:9b    56671c2ab938    5.6 GB    100% GPU     4096       llamacpp
+
+NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6351 MiB, 0 %
+```
+
 ## Next entry
 
-Phase 2 remains unapproved. It should not start until the user gives explicit approval.
+Phase 2 is complete. Phase 3 requires explicit user approval and a confirmed scope. See `docs/PHASE-3-HANDOFF.md`.
