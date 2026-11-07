@@ -97,20 +97,21 @@ function toolMessages(request: OllamaChatRequest | undefined): Record<string, un
 }
 
 describe('filesystem tools through the ToolRegistry', () => {
-  it('registers exactly four read-only tools with valid Ollama schemas', () => {
+  it('registers six tools with read-only and approval-gated permissions', () => {
     const roots = createTempRoots();
 
     try {
       const config = createConfig(roots);
       const tools = createFilesystemTools(config);
 
-      expect(tools.map((tool) => tool.name)).toEqual([
-        'list_directory',
-        'read_text_file',
-        'search_text',
-        'get_file_info',
+      expect(tools.map((tool) => [tool.name, tool.permission])).toEqual([
+        ['list_directory', 'read-only'],
+        ['read_text_file', 'read-only'],
+        ['search_text', 'read-only'],
+        ['get_file_info', 'read-only'],
+        ['create_directory', 'requires-approval'],
+        ['write_text_file', 'requires-approval'],
       ]);
-      expect(tools.every((tool) => tool.permission === 'read-only')).toBe(true);
 
       for (const tool of tools) {
         expect(asRecord(tool.parameters)).toMatchObject({
@@ -125,7 +126,14 @@ describe('filesystem tools through the ToolRegistry', () => {
       const ollamaTools = registry.getOllamaTools();
       const names = ollamaTools.map((tool) => tool.function.name);
 
-      expect(names).toEqual(['list_directory', 'read_text_file', 'search_text', 'get_file_info']);
+      expect(names).toEqual([
+        'list_directory',
+        'read_text_file',
+        'search_text',
+        'get_file_info',
+        'create_directory',
+        'write_text_file',
+      ]);
 
       const readTool = ollamaTools.find((tool) => tool.function.name === 'read_text_file');
       const readParameters = asRecord(readTool?.function.parameters);

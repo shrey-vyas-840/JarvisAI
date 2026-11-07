@@ -21,6 +21,11 @@ export type FilesystemErrorCode =
   | 'not_a_directory'
   | 'permission_denied'
   | 'file_too_large'
+  | 'already_exists'
+  | 'content_too_large'
+  | 'invalid_content'
+  | 'write_failed'
+  | 'verification_failed'
   | 'unsupported_encoding'
   | 'binary_file'
   | 'sensitive_file'
@@ -239,6 +244,10 @@ export function toFilesystemError(
 
   if (code === 'EISDIR') {
     return new FilesystemError('not_a_file', 'The requested path is a directory');
+  }
+
+  if (code === 'EEXIST') {
+    return new FilesystemError('already_exists', 'The requested path already exists');
   }
 
   return new FilesystemError(fallback, 'Filesystem operation failed');

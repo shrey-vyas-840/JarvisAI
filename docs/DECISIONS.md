@@ -187,3 +187,27 @@ Decision: Phase 3 adds only `list_directory`, `read_text_file`, `search_text`, a
 Reason: read-only tools prove the filesystem boundary and model integration before side-effecting capabilities are introduced.
 
 Consequence: Phase 4 or later work must not reuse these tools to write and must add an approval mechanism before any side-effecting tool executes.
+
+## ADR-026 — Injected per-operation approval provider
+
+Decision: integrate approval into `ToolRegistry` through an injected `ApprovalProvider`. Tools that need approval declare an `approvalRequest` builder; the registry prepares the request, asks the provider once for that exact execution, and records the outcome in the receipt. The default CLI provider uses `readline/promises` and accepts only explicit `y`/`yes`/`approve`/`approved` answers.
+
+Reason: approval must be testable without replacing the execution path and must run immediately before the side effect. A per-operation provider avoids global allow-all state and supports different future channels.
+
+Consequence: missing providers, non-interactive execution, provider errors, timeouts, EOF, invalid input, Enter, and Ctrl+C never authorize. Denied or unavailable approval stops the agent run so later side-effecting calls cannot execute.
+
+## ADR-027 — Create-only writes with exclusive creation and read-back
+
+Decision: Phase 3B adds only `create_directory` and `write_text_file`. Both require an existing parent, reject existing targets, and never create recursively. `write_text_file` uses exclusive creation (`openSync` with `wx`), a 64 KiB UTF-8 limit, exact read-back and SHA-256 verification, and preserves partial files on failure for inspection.
+
+Reason: create-only semantics avoid destructive overwrite risk and make approval precise. Exclusive creation closes the race between approval and the write. Read-back verification prevents reporting a write that did not match the approved content.
+
+Consequence: overwriting, deleting, moving, renaming, binary writes, and recursive directory creation remain out of scope. A file that appears after approval is rejected without modifying it.
+
+## ADR-028 — Approval audit without content logging
+
+Decision: record approval requested/granted/denied/cancelled/unavailable events and receipt approval status, including root, relative path, absolute path, byte count, and SHA-256, but never log file content or approval answers.
+
+Reason: the audit trail must show that a side effect was approved or refused without duplicating potentially sensitive file content into logs.
+
+Consequence: the interactive prompt shows full escaped content to the human, while logs contain only metadata. Future approval channels must preserve the same separation.

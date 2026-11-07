@@ -4,6 +4,11 @@ import path from 'node:path';
 
 import type { ToolExecutionContext } from '../../../src/core/tool-registry.js';
 import { Logger } from '../../../src/logging/logger.js';
+import type {
+  ApprovalOutcome,
+  ApprovalProvider,
+  ApprovalRequest,
+} from '../../../src/security/approval-types.js';
 import { PathGuard } from '../../../src/tools/filesystem/path-guard.js';
 
 const logger = new Logger({ level: 'debug', logDir: 'unused', console: false, file: false });
@@ -87,4 +92,20 @@ export function asRecord(value: unknown): Record<string, unknown> {
 
 export function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+export class FakeApprovalProvider implements ApprovalProvider {
+  public readonly requests: ApprovalRequest[] = [];
+
+  private readonly outcomes: ApprovalOutcome[];
+
+  public constructor(...outcomes: ApprovalOutcome[]) {
+    this.outcomes = outcomes.length > 0 ? outcomes : ['unavailable'];
+  }
+
+  public requestApproval(request: ApprovalRequest): Promise<ApprovalOutcome> {
+    this.requests.push(request);
+
+    return Promise.resolve(this.outcomes.shift() ?? 'unavailable');
+  }
 }

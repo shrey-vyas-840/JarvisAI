@@ -369,6 +369,72 @@ NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6355 MiB, 0 %
 
 The approved roots remained empty. No file was created, modified, moved, or deleted.
 
+## 2026-11-07 — Phase 3B implementation and live acceptance
+
+- Added an injected approval layer without changing the existing tool-registry execution model.
+  - `src/security/approval-types.ts`: approval request, content metadata, outcome, and provider contract.
+  - `src/security/cli-approval-provider.ts`: interactive CLI approval with explicit affirmative answers, default No, a 5-minute timeout, and fail-closed non-interactive behavior.
+  - `ToolRegistry` now prepares and resolves approval immediately before a side-effecting handler runs, records approval status in receipts, and emits approval audit events without content.
+  - The agent loop stops on `denied` and `approval_unavailable` so later side-effecting calls cannot execute.
+- Added two approval-gated filesystem tools.
+  - `create_directory`: one directory only, existing parent, no recursion, no overwrite, sensitive-path and link rejection, post-create verification.
+  - `write_text_file`: one new UTF-8 file only, 64 KiB limit, exclusive `wx` creation, no overwrite, exact read-back and SHA-256 verification, BOM preservation, and partial-file reporting without deleting it.
+- Registered all six filesystem tools in the default runtime and wired `CliApprovalProvider` into `src/cli.ts`.
+- Updated the system prompt with approval and no-overwrite rules.
+- Extended path-guard error codes for write failures and exclusive-creation races.
+- Added 65 tests across approval-provider, registry-lifecycle, create-directory, write-text-file, and agent-loop denial/integration coverage.
+
+### Phase 3B automated verification
+
+```text
+npm run typecheck
+passed with no diagnostics
+
+npm run lint
+passed with no diagnostics
+
+npm run format:check
+all matched files use Prettier style
+
+npm test
+Test Files  21 passed (21)
+Tests       175 passed (175)
+Duration    1.20s
+
+npm run build
+passed; emitted dist/security/* and dist/tools/filesystem/create-directory.js, write-text-file.js
+
+node dist/cli.js health
+Overall: WARNING (only Playwriter relay unavailable); 7 of 8 checks OK; exit code 0
+
+node dist/cli.js health --json
+WARNING; same checks; exit code 0
+```
+
+### Phase 3B live checks
+
+```text
+node dist/cli.js agent "Use list_directory on the workspace root and report what you find. Do not use any write tools."
+The workspace root (D:\AI\JarvisWorkspace) is currently empty. No files or directories are present.
+
+node dist/cli.js agent "Use the create_directory tool exactly once with root workspace and relativePath phase3b-noninteractive-denied. Do not use any other tool. Report the exact tool error."
+Agent run failed: Approval is unavailable
+
+Test-Path -LiteralPath 'D:\AI\JarvisWorkspace\phase3b-noninteractive-denied'
+False
+```
+
+The real model made a structured `create_directory` call. Because the shell was non-interactive, approval failed closed, the run stopped, and no directory was created. Logs recorded `approval.requested`, `approval.unavailable` with `reason:"unavailable"`, and `tool.failed` with `status:"approval_unavailable"`. No content or approval answer was logged.
+
+Interactive acceptance then ran in a real PowerShell terminal with genuine manual approval prompts:
+
+- `create_directory` created `phase3b-acceptance-dir`; the directory was independently verified.
+- The first `write_text_file` created `hello.txt`, but its content missed the requested final period. The discrepancy is recorded; the first attempt is not described as producing the requested exact text.
+- The exact-content retest created `hello-exact.txt` with content `Hello from JARVIS Phase 3B.` at 27 bytes. Independent PowerShell ordinal comparison returned `True`, and the tool's exact read-back and SHA-256 verification passed.
+- A second write to existing `hello.txt` was rejected with `already_exists`; no overwrite occurred.
+- A traversal write to `..\JarvisAgent\phase3b-escape.txt` was rejected with `path_traversal`; `D:\AI\JarvisAgent\phase3b-escape.txt` does not exist.
+- The accepted workspace files were preserved and not deleted.
+
 ## Next entry
 
-Phase 3 is complete. Phase 4 (Playwriter browser automation) requires explicit user approval and a confirmed scope.
+Phase 3B is complete, live-tested, and published with `feat(filesystem): add approval-gated create and write tools`. Phase 4 (Playwriter browser automation) requires explicit user approval and a confirmed scope.

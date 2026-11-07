@@ -338,6 +338,20 @@ export class AgentLoop {
             receipt.error ?? 'Tool requires approval',
           );
         }
+
+        if (receipt.status === 'denied' || receipt.status === 'approval_unavailable') {
+          return this.finish(
+            executionId,
+            'failure',
+            lastAssistantContent,
+            messages,
+            receipts,
+            rounds,
+            toolCallCount,
+            started,
+            receipt.error ?? 'Side-effecting tool was not approved',
+          );
+        }
       }
     }
 
@@ -486,6 +500,7 @@ function createBlockedReceipt(
     callId,
     toolName,
     status: 'failure',
+    approval: 'not_required',
     verification: 'not_applicable',
     result: null,
     error,
@@ -505,6 +520,7 @@ function receiptLogMetadata(
     callId: receipt.callId,
     toolName: receipt.toolName,
     status: receipt.status,
+    approval: receipt.approval,
     verification: receipt.verification,
     durationMs: receipt.durationMs,
     round,

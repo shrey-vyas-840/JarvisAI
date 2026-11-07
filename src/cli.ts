@@ -8,6 +8,7 @@ import { runHealthChecks } from './health/checks.js';
 import { formatHealthReport } from './health/format.js';
 import { OllamaClient } from './llm/ollama-client.js';
 import { Logger } from './logging/logger.js';
+import { CliApprovalProvider } from './security/cli-approval-provider.js';
 import { createFilesystemTools } from './tools/filesystem/index.js';
 import { createGetJarvisStatusTool } from './tools/get-jarvis-status.js';
 import { getVersionLabel } from './version.js';
@@ -38,6 +39,7 @@ Commands:
   version       Print the JARVIS version
   health        Run read-only environment health checks
   agent <text>  Run a local Ollama agent with registered tools
+                Filesystem writes require interactive approval
   help          Show this help
 
 Options:
@@ -187,7 +189,7 @@ export async function runDefaultAgent(
     model: config.ollama.model,
     numCtx: config.ollama.numCtx,
   });
-  const registry = new ToolRegistry();
+  const registry = new ToolRegistry({ approvalProvider: new CliApprovalProvider() });
   const tools = [createGetJarvisStatusTool(config), ...createFilesystemTools(config)];
 
   for (const tool of tools) {

@@ -2,11 +2,24 @@ import type { ZodType } from 'zod';
 
 import type { OllamaToolDefinition } from '../llm/ollama-client.js';
 import type { Logger } from '../logging/logger.js';
+import type {
+  ApprovalOutcome,
+  ApprovalProvider,
+  ApprovalRequest,
+} from '../security/approval-types.js';
 
 export type ToolPermission = 'read-only' | 'requires-approval' | 'denied';
 export type ToolExecutionStatus =
-  'success' | 'failure' | 'approval_required' | 'timeout' | 'cancelled';
+  | 'success'
+  | 'failure'
+  | 'approval_required'
+  | 'approval_unavailable'
+  | 'denied'
+  | 'timeout'
+  | 'cancelled';
 export type VerificationStatus = 'verified' | 'failed' | 'not_applicable';
+export type ToolApprovalStatus =
+  'not_required' | 'required' | 'approved' | 'denied' | 'cancelled' | 'unavailable';
 
 export interface ToolExecutionContext {
   executionId: string;
@@ -22,6 +35,10 @@ export interface ToolDefinition<TArgs = unknown> {
   parameters: Record<string, unknown>;
   argumentsSchema: ZodType<TArgs>;
   execute: (args: TArgs, context: ToolExecutionContext) => unknown;
+  approvalRequest?: (
+    args: TArgs,
+    context: ToolExecutionContext,
+  ) => ApprovalRequest | Promise<ApprovalRequest>;
   verify?: (
     args: TArgs,
     output: unknown,
@@ -36,12 +53,17 @@ export interface ToolExecutionReceipt {
   callId: string;
   toolName: string;
   status: ToolExecutionStatus;
+  approval: ToolApprovalStatus;
   verification: VerificationStatus;
   result: unknown;
   error: string | null;
   durationMs: number;
   startedAt: string;
   completedAt: string;
+}
+
+export interface ToolRegistryOptions {
+  readonly approvalProvider?: ApprovalProvider;
 }
 
 interface RegisteredTool {
@@ -58,6 +80,9 @@ interface RegisteredTool {
         message: string;
       };
   execute: (args: unknown, context: ToolExecutionContext) => Promise<unknown>;
+  approvalRequest:
+    | ((args: unknown, context: ToolExecutionContext) => ApprovalRequest | Promise<ApprovalRequest>)
+    | null;
   verify:
     | ((
         args: unknown,
@@ -80,6 +105,11 @@ const TOOL_PERMISSIONS: readonly ToolPermission[] = ['read-only', 'requires-appr
 
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
+  private readonly approvalProvider: ApprovalProvider | null;
+
+  public constructor(options: ToolRegistryOptions = {}) {
+    this.approvalProvider = options.approvalProvider ?? null;
+  }
 
   public register<TArgs>(definition: ToolDefinition<TArgs>): void {
     validateDefinition(definition);
@@ -88,6 +118,7 @@ export class ToolRegistry {
       throw new Error(`Tool is already registered: ${definition.name}`);
     }
 
+    const approvalRequest = definition.approvalRequest;
     const registered: RegisteredTool = {
       name: definition.name,
       description: definition.description,
@@ -102,6 +133,10 @@ export class ToolRegistry {
         return { success: true, data: parsed.data };
       },
       execute: (args, context) => Promise.resolve(definition.execute(args as TArgs, context)),
+      approvalRequest:
+        approvalRequest === undefined
+          ? null
+          : (args, context) => approvalRequest(args as TArgs, context),
       verify:
         definition.verify === undefined
           ? null
@@ -141,19 +176,28 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
 
     if (tool === undefined) {
-      return createReceipt(name, context, started, 'failure', 'Unknown tool', null);
+      return createReceipt(name, context, started, 'failure', 'not_required', 'Unknown tool', null);
     }
 
     if (tool.permission === 'denied') {
-      return createReceipt(name, context, started, 'failure', 'Tool is denied by policy', null);
+      return createReceipt(
+        name,
+        context,
+        started,
+        'failure',
+        'not_required',
+        'Tool is denied by policy',
+        null,
+      );
     }
 
-    if (tool.permission === 'requires-approval') {
+    if (tool.permission === 'requires-approval' && tool.approvalRequest === null) {
       return createReceipt(
         name,
         context,
         started,
         'approval_required',
+        'required',
         'Tool requires approval',
         null,
       );
@@ -167,13 +211,34 @@ export class ToolRegistry {
         context,
         started,
         'failure',
+        'not_required',
         `Invalid arguments: ${parsed.message}`,
         null,
       );
     }
 
     if (context.signal.aborted) {
-      return createReceipt(name, context, started, 'cancelled', 'Tool execution cancelled', null);
+      return createReceipt(
+        name,
+        context,
+        started,
+        'cancelled',
+        'not_required',
+        'Tool execution cancelled',
+        null,
+      );
+    }
+
+    let approval: ToolApprovalStatus = 'not_required';
+
+    if (tool.permission === 'requires-approval' && tool.approvalRequest !== null) {
+      const approvalResult = await this.resolveApproval(tool, parsed.data, context, started);
+
+      if (approvalResult.receipt !== null) {
+        return approvalResult.receipt;
+      }
+
+      approval = approvalResult.approval;
     }
 
     const outcome = await runWithLimits(tool, parsed.data, context);
@@ -181,7 +246,7 @@ export class ToolRegistry {
     if (outcome.status !== 'completed') {
       const status: ToolExecutionStatus = outcome.status === 'failed' ? 'failure' : outcome.status;
 
-      return createReceipt(name, context, started, status, outcome.error, null);
+      return createReceipt(name, context, started, status, approval, outcome.error, null);
     }
 
     let verification: VerificationStatus = 'not_applicable';
@@ -204,7 +269,171 @@ export class ToolRegistry {
       }
     }
 
-    return createReceipt(name, context, started, status, error, outcome.output, verification);
+    return createReceipt(
+      name,
+      context,
+      started,
+      status,
+      approval,
+      error,
+      outcome.output,
+      verification,
+    );
+  }
+
+  private async resolveApproval(
+    tool: RegisteredTool,
+    args: unknown,
+    context: ToolExecutionContext,
+    started: Date,
+  ): Promise<{
+    readonly receipt: ToolExecutionReceipt | null;
+    readonly approval: ToolApprovalStatus;
+  }> {
+    const approvalRequest = tool.approvalRequest;
+
+    if (approvalRequest === null) {
+      return { receipt: null, approval: 'required' };
+    }
+
+    if (this.approvalProvider === null) {
+      context.logger.error('approval.unavailable', { toolName: tool.name, reason: 'no_provider' });
+
+      return {
+        receipt: createReceipt(
+          tool.name,
+          context,
+          started,
+          'approval_unavailable',
+          'unavailable',
+          'Approval provider is unavailable',
+          null,
+        ),
+        approval: 'unavailable',
+      };
+    }
+
+    let request: ApprovalRequest;
+
+    try {
+      request = await approvalRequest(args, context);
+    } catch (error) {
+      return {
+        receipt: createReceipt(
+          tool.name,
+          context,
+          started,
+          'failure',
+          'required',
+          `Approval request could not be prepared: ${formatError(error)}`,
+          null,
+        ),
+        approval: 'required',
+      };
+    }
+
+    context.logger.info('approval.requested', approvalLogMetadata(tool.name, request));
+
+    let outcome: ApprovalOutcome;
+
+    try {
+      outcome = await this.approvalProvider.requestApproval(request, {
+        signal: context.signal,
+      });
+    } catch (error) {
+      if (context.signal.aborted || isAbortError(error)) {
+        context.logger.warn('approval.cancelled', approvalLogMetadata(tool.name, request));
+
+        return {
+          receipt: createReceipt(
+            tool.name,
+            context,
+            started,
+            'cancelled',
+            'cancelled',
+            'Approval cancelled',
+            null,
+          ),
+          approval: 'cancelled',
+        };
+      }
+
+      context.logger.error('approval.unavailable', {
+        ...approvalLogMetadata(tool.name, request),
+        reason: 'provider_error',
+      });
+
+      return {
+        receipt: createReceipt(
+          tool.name,
+          context,
+          started,
+          'approval_unavailable',
+          'unavailable',
+          'Approval provider failed',
+          null,
+        ),
+        approval: 'unavailable',
+      };
+    }
+
+    if (outcome === 'approved') {
+      context.logger.info('approval.granted', approvalLogMetadata(tool.name, request));
+
+      return { receipt: null, approval: 'approved' };
+    }
+
+    if (outcome === 'cancelled') {
+      context.logger.warn('approval.cancelled', approvalLogMetadata(tool.name, request));
+
+      return {
+        receipt: createReceipt(
+          tool.name,
+          context,
+          started,
+          'cancelled',
+          'cancelled',
+          'Approval cancelled',
+          null,
+        ),
+        approval: 'cancelled',
+      };
+    }
+
+    if (outcome === 'denied') {
+      context.logger.warn('approval.denied', approvalLogMetadata(tool.name, request));
+
+      return {
+        receipt: createReceipt(
+          tool.name,
+          context,
+          started,
+          'denied',
+          'denied',
+          'Operation denied by user',
+          null,
+        ),
+        approval: 'denied',
+      };
+    }
+
+    context.logger.error('approval.unavailable', {
+      ...approvalLogMetadata(tool.name, request),
+      reason: 'unavailable',
+    });
+
+    return {
+      receipt: createReceipt(
+        tool.name,
+        context,
+        started,
+        'approval_unavailable',
+        'unavailable',
+        'Approval is unavailable',
+        null,
+      ),
+      approval: 'unavailable',
+    };
   }
 }
 
@@ -231,6 +460,13 @@ function validateDefinition<TArgs>(definition: ToolDefinition<TArgs>): void {
 
   if (definition.verify !== undefined && typeof definition.verify !== 'function') {
     throw new Error(`Tool verify handler is invalid: ${definition.name}`);
+  }
+
+  if (
+    definition.approvalRequest !== undefined &&
+    typeof definition.approvalRequest !== 'function'
+  ) {
+    throw new Error(`Tool approval request handler is invalid: ${definition.name}`);
   }
 
   if (!Number.isInteger(definition.timeoutMs) || definition.timeoutMs < 1) {
@@ -293,6 +529,7 @@ function createReceipt(
   context: ToolExecutionContext,
   started: Date,
   status: ToolExecutionStatus,
+  approval: ToolApprovalStatus,
   error: string | null,
   result: unknown,
   verification: VerificationStatus = 'not_applicable',
@@ -304,6 +541,7 @@ function createReceipt(
     callId: context.callId,
     toolName,
     status,
+    approval,
     verification,
     result,
     error,
@@ -311,6 +549,22 @@ function createReceipt(
     startedAt: started.toISOString(),
     completedAt: completed.toISOString(),
   };
+}
+
+function approvalLogMetadata(toolName: string, request: ApprovalRequest): Record<string, unknown> {
+  return {
+    toolName,
+    operation: request.operation,
+    root: request.root,
+    relativePath: request.relativePath,
+    absolutePath: request.absolutePath,
+    contentBytes: request.content?.bytes ?? null,
+    contentSha256: request.content?.sha256 ?? null,
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function formatValidationError(

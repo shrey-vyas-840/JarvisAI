@@ -1,5 +1,99 @@
 # Test Report
 
+## Phase 3B — 2026-11-07
+
+Status: **implementation, automated verification, and interactive live acceptance complete (2026-11-07)**
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+node dist/cli.js health
+node dist/cli.js health --json
+node dist/cli.js agent "Use list_directory on the workspace root and report what you find. Do not use any write tools."
+node dist/cli.js agent "Use the create_directory tool exactly once with root workspace and relativePath phase3b-noninteractive-denied. Do not use any other tool. Report the exact tool error."
+Test-Path -LiteralPath 'D:\AI\JarvisWorkspace\phase3b-noninteractive-denied'
+```
+
+The interactive acceptance commands were run by the user in a real PowerShell terminal with manual approval. The exact-content retest and independent comparison were also performed there.
+
+### Automated results
+
+- `npm run typecheck` (`tsc --noEmit`): passed with no diagnostics.
+- `npm run lint` (`eslint .`): passed with no diagnostics.
+- `npm run format:check` (`prettier --check .`): passed; all matched files use Prettier style.
+- `npm test` (`vitest run`):
+  - Vitest `v5.1.0`.
+  - 21 test files passed.
+  - 175 tests passed.
+  - Duration: 1.20 s.
+  - This includes all 110 Phase 3 tests.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed; emitted the approval, create-directory, and write-text-file modules.
+- `node dist/cli.js health`: status `WARNING`; 8 checks; 7 `OK` and only the Playwriter relay check warned; exit code `0`. Node.js 24.18.0, npm 11.16.0, Ollama 0.40.15, `qwen3.5:9b` installed, Playwriter 0.9.0 installed, NVIDIA RTX 4060 detected.
+- `node dist/cli.js health --json`: same status and checks in JSON form; exit code `0`.
+
+### Live results
+
+#### Non-interactive safety check
+
+- Live read-only smoke test against `qwen3.5:9b` succeeded with the six-tool schema registered. The agent reported that the workspace root is empty. No approval was requested and no write occurred.
+- Live non-interactive write attempt:
+  - The model made a real structured `create_directory` call for `phase3b-noninteractive-denied`.
+  - The CLI was non-interactive, so `CliApprovalProvider` returned `unavailable` without prompting.
+  - The agent stopped with `Agent run failed: Approval is unavailable`.
+  - `Test-Path` confirmed that the target directory was not created.
+  - `logs/jarvis.log` recorded `approval.requested` followed by `approval.unavailable` with `reason:"unavailable"`, and `tool.failed` with `status:"approval_unavailable"`; no file content or approval answer was logged.
+
+#### Interactive acceptance with manual approval
+
+1. **Directory creation**
+   - `create_directory` created `phase3b-acceptance-dir` under the workspace root.
+   - Human approval was granted.
+   - The directory was independently verified outside the agent.
+
+2. **Initial file creation and punctuation discrepancy**
+   - The first `write_text_file` request created `hello.txt` with human approval.
+   - The initial content missed the requested final period.
+   - This discrepancy is recorded as observed. The first attempt is not reported as having produced the requested exact text, and a separate exact-content retest was run rather than claiming otherwise.
+
+3. **Exact-content retest**
+   - A separate `write_text_file` request created `hello-exact.txt` under `phase3b-acceptance-dir` with human approval.
+   - Content: `Hello from JARVIS Phase 3B.`
+   - File size: 27 bytes.
+   - Independent PowerShell ordinal comparison returned `True`.
+   - The tool's exact read-back and SHA-256 verification passed.
+
+4. **Overwrite protection**
+   - A second write attempt against existing `hello.txt` was rejected with `already_exists`.
+   - No overwrite occurred.
+
+5. **Path traversal protection**
+   - A write attempt using `..\JarvisAgent\phase3b-escape.txt` was rejected with `path_traversal`.
+   - `D:\AI\JarvisAgent\phase3b-escape.txt` does not exist.
+
+The accepted files `phase3b-acceptance-dir`, `hello.txt`, and `hello-exact.txt` remain in the workspace and were not deleted.
+
+### Coverage added
+
+- CLI approval provider: explicit `y`/`yes`/`approve`/`approved`, case/space normalization, denial for empty/invalid/other answers, non-interactive unavailability, EOF, cancellation, timeout, invalid timeout configuration, prompt formatting with escaped content and SHA-256, and escaping of control, bidirectional, zero-width, and line/paragraph separator characters.
+- Registry approval lifecycle: requested/granted/denied/cancelled/unavailable receipts, missing provider, provider errors, preparation failures, and no execution after denial.
+- `create_directory`: approved creation, verification, existing-directory/file rejection before prompt, missing parent, non-recursive behavior, traversal/absolute/UNC paths, junction rejection, sensitive directories, denial/cancellation/unavailable, invalid arguments, stale verification, and recursive-looking escapes.
+- `write_text_file`: exact UTF-8/emoji/BOM/empty content, approval prompt metadata, existing-file preservation, missing parents, traversal/absolute/UNC paths, junction rejection, sensitive targets, denial/cancellation/unavailable, provider errors, invalid arguments, 64 KiB byte boundary including multi-byte text, post-approval race rejection without overwrite, exact read-back verification, tamper detection, and preservation of files on verification failure.
+- Agent-loop integration: approved `create_directory` followed by `write_text_file` with real files and verified receipts; denial stops later side-effecting calls; unavailable approval stops the run without writing.
+- All Phase 1–3 regression tests remain passing.
+
+### Notes
+
+- Temporary unit-test roots are created under the system temp directory and removed by each test.
+- The live non-interactive check made no writes in the approved roots.
+- The interactive acceptance created only the paths listed above, after explicit human approval.
+- The health warning is environmental: the Playwriter relay was not running. Phase 3B does not use the relay.
+- The initial punctuation mismatch was not hidden or normalized in this report; the exact-content result is based on `hello-exact.txt`, not the first attempt.
+
 ## Phase 3 — 2026-11-07
 
 ### Commands executed
