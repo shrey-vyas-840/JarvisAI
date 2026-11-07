@@ -147,3 +147,43 @@ Decision: the default agent runner logs to the redacting file logger with consol
 Reason: agent logs are long-lived audit data, while the CLI should keep model output readable. Cancellation must not be reported as success.
 
 Consequence: future commands should preserve the separation between user-facing output and structured audit logs.
+
+## ADR-021 — Root-identifier filesystem tools
+
+Decision: expose only the root identifiers `workspace` and `exports` and a path relative to that root. Resolve roots from configuration and never accept arbitrary absolute paths.
+
+Reason: the model should not need or receive drive-level path authority, and a closed root identifier set keeps the boundary explicit and auditable.
+
+Consequence: adding a root requires a configuration field, a root identifier, schema updates, and tests. Absolute-path requests fail closed with `absolute_path`.
+
+## ADR-022 — Fail-closed Windows path guard
+
+Decision: validate every relative-path component before access, reject traversal, absolute/rooted paths, drive changes, UNC and device paths, alternate data streams, ambiguous components, reserved device names, and symlink/junction escapes. Compare real paths case-insensitively against the approved root and revalidate immediately before use.
+
+Reason: Windows path aliasing, short names, reserved names, and reparse points make simple string-prefix checks insufficient. Revalidation reduces the time-of-check/time-of-use risk from path or link swaps.
+
+Consequence: symbolic links and junctions are rejected even when their target is inside an approved root. Supporting links later requires a separate reviewed decision.
+
+## ADR-023 — Read-only filesystem limits and content filtering
+
+Decision: enforce hard output limits and reject credential-like files, binary content, and invalid UTF-8. Search reports skipped and unreadable counts rather than returning unsafe or partial data as if complete.
+
+Reason: the local model has a bounded context, and text reads must not become a path to private keys, credentials, or opaque binary data.
+
+Consequence: large files are truncated with explicit metadata rather than streamed. Write or delete tools remain out of scope and require a separate approval model.
+
+## ADR-024 — Filesystem output verification
+
+Decision: every filesystem tool provides a `verify` check that re-resolves the path and validates the reported root, absolute path, type or counts, and explicit `verificationStatus`.
+
+Reason: execution receipts must distinguish an actual verified result from a plausible-looking model claim.
+
+Consequence: verification failures are reported as failures. The agent may still complete successfully when it accurately reports a failed tool call; the tool receipt remains `failure`.
+
+## ADR-025 — Read-only Phase 3 boundary
+
+Decision: Phase 3 adds only `list_directory`, `read_text_file`, `search_text`, and `get_file_info`. Writes, creation, moves, deletion, shell, browser, memory, voice, UI, and approval workflows remain out of scope.
+
+Reason: read-only tools prove the filesystem boundary and model integration before side-effecting capabilities are introduced.
+
+Consequence: Phase 4 or later work must not reuse these tools to write and must add an approval mechanism before any side-effecting tool executes.

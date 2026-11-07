@@ -264,6 +264,111 @@ qwen3.5:9b    56671c2ab938    5.6 GB    100% GPU     4096       llamacpp
 NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6351 MiB, 0 %
 ```
 
+## 2026-11-07 — Phase 3 complete
+
+- Added secure read-only filesystem tools without changing the Phase 2 architecture.
+  - `src/tools/filesystem/path-guard.ts`: root validation, relative-path validation, containment, component inspection, link rejection, revalidation, and error mapping.
+  - `src/tools/filesystem/file-safety.ts`: credential-like filename/directory detection, binary detection, and fatal UTF-8 decoding.
+  - `src/tools/filesystem/types.ts`: shared limits and tool options.
+  - `src/tools/filesystem/list-directory.ts`, `read-text-file.ts`, `search-text.ts`, and `get-file-info.ts`.
+  - `src/tools/filesystem/index.ts`: tool creation and registration.
+- Restricted all access to the `workspace` and `exports` roots from configuration.
+- Rejected traversal, absolute/rooted paths, drive changes, UNC paths, device paths, alternate data streams, ambiguous or invalid components, reserved device names, and symlink/junction escapes.
+- Revalidated the resolved target immediately before each access and failed closed when it changed.
+- Added limits: 200 directory entries; 1 MiB and 20,000 characters per text read; search depth 5, 500 files, 256 KiB per file, 100 matches, and 200-character excerpts.
+- Rejected credential-like paths, binary content, and invalid UTF-8 instead of returning partial or unsafe data.
+- Registered `list_directory`, `read_text_file`, `search_text`, and `get_file_info` in the default agent runtime.
+- Updated the system prompt with approved-root and relative-path guidance.
+- Added six filesystem test files and a shared test helper.
+- Updated `README.md`, `docs/STATUS.md`, `docs/DECISIONS.md`, `docs/TEST-REPORT.md`, and this log; replaced the Phase 3 handoff plan with its completion record.
+
+### Phase 3 verification
+
+```text
+npm run typecheck
+passed with no diagnostics
+
+npm run lint
+passed with no diagnostics
+
+npm run format:check
+All matched files use Prettier code style!
+
+npm test
+Test Files  17 passed (17)
+Tests       110 passed (110)
+Duration    1.41s
+
+npm run build
+passed; emitted dist/tools/filesystem/*
+
+node dist/cli.js health
+Overall: WARNING
+Only the Playwriter relay check warned; the other 7 checks passed.
+
+node dist/cli.js health --json
+status WARNING; 8 checks; exit code 0
+```
+
+Live Phase 3 acceptance commands:
+
+```powershell
+node dist/cli.js agent "Use the list_directory tool on the workspace approved root with an empty relativePath. Report the actual entries and state clearly whether the workspace is empty. Do not create or modify anything."
+node dist/cli.js agent "Use the get_file_info tool on the workspace approved root with an empty relativePath. Report the actual type, verified absolute path, relative path, and read-only status. Do not modify anything."
+node dist/cli.js agent "Determine whether the workspace approved root contains any safe text files. Use list_directory and, if useful, search_text with the literal query JARVIS. If there are no files, report that accurately. Do not create, modify, or delete anything."
+node dist/cli.js agent "Security test: use the read_text_file tool with root workspace and relativePath D:\AI\JarvisAgent\package.json. This target is outside the approved roots. Report the exact tool error accurately and do not claim success."
+node dist/cli.js agent "Security test: use the read_text_file tool with root workspace and relativePath ..\JarvisAgent\package.json. This attempts parent-directory traversal outside the approved root. Report the exact tool error accurately and do not claim success."
+```
+
+Actual live results:
+
+```text
+list_directory:
+The workspace is empty. The list_directory tool returned an empty entries array with 0 total entries...
+
+get_file_info:
+Type: directory
+Absolute Path: D:\AI\JarvisWorkspace
+Relative Path: (empty)
+Read-only Status: false
+
+safe-text-file check:
+The workspace approved root contains no files or directories. The directory is empty, so there are no safe text files to report.
+
+absolute path attempt:
+absolute_path: Absolute drive paths are not allowed
+
+traversal attempt:
+path_traversal: Parent-directory traversal is not allowed
+```
+
+Live log evidence:
+
+```text
+tool.registered  list_directory, read-only, 5000 ms
+tool.registered  read_text_file, read-only, 10000 ms
+tool.registered  search_text, read-only, 30000 ms
+tool.registered  get_file_info, read-only, 5000 ms
+tool.completed   list_directory, status success, verification verified, durationMs 3
+tool.completed   get_file_info, status success, verification verified, durationMs 3
+tool.failed      read_text_file, status failure, verification not_applicable, durationMs 1
+tool.failed      read_text_file, status failure, verification not_applicable, durationMs 2
+agent.completed  status success, rounds 2, toolCallCount 1
+```
+
+The agent's overall run reports `success` because it correctly reported the failed tool call; the filesystem receipts themselves are `failure` and never claim success.
+
+GPU observation after the acceptance runs:
+
+```text
+NAME          ID              SIZE      PROCESSOR    CONTEXT    RUNNER
+qwen3.5:9b    56671c2ab938    5.6 GB    100% GPU     4096       llamacpp
+
+NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6355 MiB, 0 %
+```
+
+The approved roots remained empty. No file was created, modified, moved, or deleted.
+
 ## Next entry
 
-Phase 2 is complete. Phase 3 requires explicit user approval and a confirmed scope. See `docs/PHASE-3-HANDOFF.md`.
+Phase 3 is complete. Phase 4 (Playwriter browser automation) requires explicit user approval and a confirmed scope.

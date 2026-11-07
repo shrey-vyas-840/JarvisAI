@@ -1,5 +1,109 @@
 # Test Report
 
+## Phase 3 — 2026-11-07
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+node dist/cli.js health
+node dist/cli.js health --json
+node dist/cli.js agent "Use the list_directory tool on the workspace approved root with an empty relativePath. Report the actual entries and state clearly whether the workspace is empty. Do not create or modify anything."
+node dist/cli.js agent "Use the get_file_info tool on the workspace approved root with an empty relativePath. Report the actual type, verified absolute path, relative path, and read-only status. Do not modify anything."
+node dist/cli.js agent "Determine whether the workspace approved root contains any safe text files. Use list_directory and, if useful, search_text with the literal query JARVIS. If there are no files, report that accurately. Do not create, modify, or delete anything."
+node dist/cli.js agent "Security test: use the read_text_file tool with root workspace and relativePath D:\AI\JarvisAgent\package.json. This target is outside the approved roots. Report the exact tool error accurately and do not claim success."
+node dist/cli.js agent "Security test: use the read_text_file tool with root workspace and relativePath ..\JarvisAgent\package.json. This attempts parent-directory traversal outside the approved root. Report the exact tool error accurately and do not claim success."
+ollama ps
+nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader
+```
+
+### Actual results
+
+- `npm run typecheck` (`tsc --noEmit`): passed with no diagnostics.
+- `npm run lint` (`eslint .`): passed with no diagnostics.
+- `npm run format:check`: passed with `All matched files use Prettier code style!`.
+- `npm test` (`vitest run`):
+  - Vitest `v5.1.0`.
+  - 17 test files passed.
+  - 110 tests passed.
+  - Duration: 1.41 s.
+  - This includes all 61 Phase 2 tests.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+- Build output included:
+  - `dist/tools/filesystem/file-safety.js`
+  - `dist/tools/filesystem/get-file-info.js`
+  - `dist/tools/filesystem/index.js`
+  - `dist/tools/filesystem/list-directory.js`
+  - `dist/tools/filesystem/path-guard.js`
+  - `dist/tools/filesystem/read-text-file.js`
+  - `dist/tools/filesystem/search-text.js`
+  - `dist/tools/filesystem/types.js`
+- `node dist/cli.js health`: `Overall: WARNING`; 7 checks `OK`; the Playwriter relay check warned because the relay was not running; exit code `0`.
+- `node dist/cli.js health --json`: status `WARNING`; 8 checks; exit code `0`.
+- Live `list_directory` run:
+  - The model made a real structured `list_directory` call.
+  - The final answer reported: `The workspace is empty. The list_directory tool returned an empty entries array with 0 total entries...`
+  - Logs recorded `tool.completed` with `status:success` and `verification:verified`.
+  - `agent.completed` recorded 2 rounds, 1 tool call, 10.885 s, and `status:success`.
+- Live `get_file_info` run:
+  - The final answer reported type `directory`, absolute path `D:\AI\JarvisWorkspace`, empty relative path, and read-only status `false`.
+  - Logs recorded `tool.completed` with `status:success` and `verification:verified`.
+  - `agent.completed` recorded 2 rounds, 1 tool call, 3.696 s, and `status:success`.
+- Live safe-text-file check:
+  - The model used `list_directory` and accurately reported that the workspace is empty and contains no safe text files.
+  - Logs recorded a verified `list_directory` receipt.
+  - `agent.completed` recorded 2 rounds, 1 tool call, 3.495 s, and `status:success`.
+- Live outside-root absolute-path attempt:
+  - The model made a real `read_text_file` call.
+  - The tool failed with `absolute_path: Absolute drive paths are not allowed`.
+  - Logs recorded `tool.failed` with `status:failure` and `verification:not_applicable`.
+- Live parent-traversal attempt:
+  - The tool failed with `path_traversal: Parent-directory traversal is not allowed`.
+  - Logs recorded `tool.failed` with `status:failure` and `verification:not_applicable`.
+- No file outside the approved roots was read, and no file was created, modified, moved, or deleted.
+- `ollama ps` after the live runs:
+
+```text
+NAME          ID              SIZE      PROCESSOR    CONTEXT    RUNNER
+qwen3.5:9b    56671c2ab938    5.6 GB    100% GPU     4096       llamacpp
+```
+
+- `nvidia-smi` after the live runs:
+
+```text
+NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 6355 MiB, 0 %
+```
+
+### Coverage added
+
+- Root validation and configuration.
+- Relative-path validation: traversal, absolute and rooted paths, drive changes, UNC paths, device paths, alternate data streams, empty components, `.`/`..`, control characters, whitespace, trailing dots/spaces, and reserved device names.
+- Case-insensitive containment and approved-root boundaries for both roots.
+- Symlink and junction rejection, including link swaps after resolution.
+- Missing roots, missing files, wrong types, permission failures, and unreadable paths.
+- Directory listing ordering, limits, truncation, symlink reporting, and metadata errors.
+- Text reads: UTF-8, limits, byte-size rejection, truncation, binary files, sensitive filenames, and invalid encodings.
+- `get_file_info` metadata, type detection, size, timestamps, read-only detection, and verification.
+- `search_text`: literal case-sensitive matching, depth/file/size/match/excerpt limits, sensitive/binary/symlink/oversized skips, unreadable reporting, and no-binary-content guarantees.
+- Tool registration and agent-loop integration with real filesystem tools.
+- Registry, execution receipt, and verification behavior for filesystem tools.
+- Phase 2 regression coverage remains passing.
+
+### Notes
+
+- The approved roots were empty, so the live read success path could not be exercised against a real file. `read_text_file` success behavior is covered by unit tests; live `read_text_file` calls exercised the rejection paths.
+- `search_text` success behavior is covered by unit tests. The live empty-workspace check used `list_directory`, which was sufficient to establish there were no files to read or search.
+- The agent's overall run reports `success` for the negative tests because it accurately reported the failed tool call. The tool receipts themselves remain `failure`, and the final answer did not claim success.
+- Initial verification found six lint errors (control-character regex, optional chain, `prefer-const`, two void-returning test arrows, and an unnecessary template literal) plus Prettier formatting differences. All were corrected before the final passing run.
+- The health warning is environmental: the Playwriter relay was not running. Phase 3 does not use the relay.
+- The live runs loaded `qwen3.5:9b` on the RTX 4060 with 100% GPU processing and 4096 context.
+- Agent logs are written to `logs/jarvis.log` with console output disabled for the default runner.
+- Phase 3 implementation, tests, and documentation are included in one feature commit.
+
 ## Phase 2 — 2026-11-07
 
 ### Commands executed

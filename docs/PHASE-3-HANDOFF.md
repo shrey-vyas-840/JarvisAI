@@ -1,112 +1,112 @@
-# Phase 3 Handoff Plan
+# Phase 3 Handoff Record
 
-Status: **not started**
-Approval: **required before any Phase 3 implementation**
+Status: **complete (2026-11-07)**
+Scope: **approved read-only filesystem increment implemented and verified**
 
-Phase 2 is complete and has a verified local agent execution path. Phase 3 should extend that path through the existing registered-tool contract without weakening the Phase 2 safety properties.
+Phase 3 extended the Phase 2 registered-tool path with four read-only filesystem tools. It did not weaken the Phase 2 safety properties and did not add any side-effecting capability.
 
-## Proposed Phase 3 scope
+## Delivered
 
-The exact Phase 3 scope has not been approved. The recommended next increment is a small set of filesystem tools restricted to the approved operating roots:
+- `list_directory`
+- `read_text_file`
+- `search_text`
+- `get_file_info`
 
-- `D:\AI\JarvisWorkspace`
-- `D:\AI\Exports`
+Implementation files:
 
-Recommended first increment:
+- `src/tools/filesystem/path-guard.ts`
+- `src/tools/filesystem/file-safety.ts`
+- `src/tools/filesystem/types.ts`
+- `src/tools/filesystem/list-directory.ts`
+- `src/tools/filesystem/read-text-file.ts`
+- `src/tools/filesystem/search-text.ts`
+- `src/tools/filesystem/get-file-info.ts`
+- `src/tools/filesystem/index.ts`
 
-- Read-only tools:
-  - `list_directory`
-  - `read_text_file`
-  - `search_text`
-  - `get_file_info`
-- Strict path handling:
-  - Resolve every path against an approved root.
-  - Reject traversal outside approved roots.
-  - Reject symlink escapes where applicable.
-  - Reject absolute paths that do not resolve under an approved root.
-- Output and input limits:
-  - Maximum file size for reads.
-  - Maximum returned bytes or characters.
-  - Maximum directory entries and search results.
-  - Clear truncation metadata.
-- Verification:
-  - Confirm that each returned path is within an approved root.
-  - Confirm actual file metadata when applicable.
-  - Return structured failures rather than partial claims.
+Integration:
 
-Do not add write, delete, move, shell, browser, memory, voice, or UI tools in this increment unless explicitly approved.
+- The default agent runtime in `src/cli.ts` registers all four tools.
+- `src/core/system-prompt.ts` explains the approved roots and relative-path rules.
+- `get_jarvis_status` remains registered and unchanged.
 
-## Proposed second increment
+## Security boundary
 
-Only after read-only filesystem tools are verified:
+- Approved roots are resolved from configuration:
+  - `workspace` → `D:\AI\JarvisWorkspace`
+  - `exports` → `D:\AI\Exports`
+- Tools accept only a root identifier and a relative path.
+- Rejected inputs include:
+  - Parent traversal (`..`)
+  - Absolute and rooted paths
+  - Drive changes
+  - UNC paths
+  - Device paths (`\\.\`, `\\?\`)
+  - Alternate data streams (`:`)
+  - Empty, ambiguous, overlong, or invalid components
+  - Control characters and leading/trailing whitespace
+  - Trailing dots or spaces
+  - Reserved device names (`CON`, `NUL`, `COM1`…)
+- Symbolic links and junctions are never followed and are rejected outright.
+- Every resolved target is revalidated immediately before use, including after real-path expansion.
+- Containment checks are case-insensitive and require a real path-separator boundary.
+- Credential-like files and directories are rejected or skipped, including `.env`, private keys, `.ssh`, `.aws`, `.kube`, and similar names.
+- Binary content and invalid UTF-8 are rejected for reads and skipped during search.
+- Failures are returned as structured tool failures and are never reported as success.
 
-- Write tools with `requires-approval` permission:
-  - `write_text_file`
-  - `create_directory`
-  - `move_path`
-- Approval must happen before execution, not after.
-- Writes must be restricted to approved roots.
-- Existing-file overwrite must require explicit approval.
-- Destructive deletion should remain out of scope until a separate approval model exists.
-- Record a pre-write and post-write receipt with path, size, and verification result.
+## Limits
 
-## Required behavior
+- Directory listings: 200 entries.
+- Text reads: 1 MiB and 20,000 characters.
+- Search: depth 5, 500 files, 256 KiB per file, 100 matches, 200-character excerpts.
+- Search reports skipped symlinks, sensitive files, binary files, oversized files, and unreadable paths.
 
-- Reuse `ToolDefinition`, `ToolRegistry`, and execution receipts.
-- Do not bypass argument validation.
-- Keep tool execution sequential.
-- Preserve the Phase 2 agent limits unless a reviewed change is approved.
-- Log tool registration, requests, starts, completions, validation failures, and failures.
-- Return failures to the model as structured tool results.
-- Never report a failed, denied, timed-out, or cancelled operation as successful.
-- Do not expose secrets, tokens, or unrelated file contents.
-- Do not access `D:\AI\JarvisAgent` source, model storage, credentials, or arbitrary user directories through the tools.
+## Verification
 
-## Required tests
+```text
+npm run typecheck
+passed with no diagnostics
 
-- Path normalization and traversal rejection.
-- Approved-root boundary tests for every filesystem tool.
-- Symlink escape tests where supported.
-- File-size and output-size limits.
-- Missing files, permission errors, and invalid encodings.
-- Directory listing and search truncation.
-- Tool verification failure and timeout behavior.
-- Approval-required tools that do not execute before approval.
-- Agent-loop integration with at least one real read-only filesystem tool.
-- Regression tests for all Phase 2 behavior.
+npm run lint
+passed with no diagnostics
 
-## Live acceptance criteria
+npm run format:check
+All matched files use Prettier code style!
 
-- Ollama `qwen3.5:9b` is available locally.
-- A live instruction causes a real structured tool call.
-- The tool reads or lists only inside an approved test root.
-- The returned result is verified and sent back to the model.
-- The final response reflects the actual result.
-- Logs show the tool lifecycle and receipt status.
-- No source, secret, model, browser, or unrelated filesystem changes occur.
-- GPU execution is observed and recorded.
+npm test
+Test Files  17 passed (17)
+Tests       110 passed (110)
+Duration    1.41s
 
-## Prerequisites and decisions needed
+npm run build
+passed; emitted dist/tools/filesystem/*
+```
 
-Before implementation, confirm:
+Live acceptance against `qwen3.5:9b`:
 
-- The exact Phase 3 scope.
-- Which tools are approved for the first increment.
-- Whether write tools are included.
-- The approval UX for side-effecting tools.
-- The maximum read size and output size.
-- Whether symlinks are allowed at all.
-- Whether search recursion and file-type filters are required.
+- Real structured `list_directory` call returned the actual empty workspace.
+- Real structured `get_file_info` call returned the verified directory metadata.
+- Empty-workspace check accurately reported that no safe text files exist.
+- Outside-root absolute-path attempt failed with `absolute_path`.
+- Parent-traversal attempt failed with `path_traversal`.
+- Tool lifecycle logs recorded verified successes and tool-level failures.
+- GPU execution was 100% on the RTX 4060 with 5.6 GB and 4096 context.
+- The approved roots remained empty; no writes, moves, or deletions occurred.
 
-## Non-goals
+The latest `health` run reported `Overall: WARNING` only because the Playwriter relay was not running. Phase 3 does not use the relay. All other checks passed, and the exit code was `0`.
 
-- Playwriter or browser automation; that remains a later phase.
+## Out of scope
+
+Still not implemented:
+
+- Write, create, move, or delete filesystem tools.
 - Shell command execution.
+- Browser automation.
 - Memory, voice, and UI.
 - MCP integrations.
-- Model management or downloading.
-- Changes to Phase 2 agent limits without review.
+- Human approval workflow for side-effecting tools.
 
-## Exact next task
+## Next increment
 
-Wait for explicit user approval. Then confirm the Phase 3 scope and implement only the approved read-only filesystem increment first.
+Any write capability requires a separate approved scope and an approval mechanism that runs before execution. It must reuse the same root boundary and must not silently overwrite existing files. Destructive deletion should remain out of scope until a dedicated approval model exists.
+
+Playwriter browser automation is a separate later phase.

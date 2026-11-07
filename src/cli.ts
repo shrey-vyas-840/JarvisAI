@@ -8,6 +8,7 @@ import { runHealthChecks } from './health/checks.js';
 import { formatHealthReport } from './health/format.js';
 import { OllamaClient } from './llm/ollama-client.js';
 import { Logger } from './logging/logger.js';
+import { createFilesystemTools } from './tools/filesystem/index.js';
 import { createGetJarvisStatusTool } from './tools/get-jarvis-status.js';
 import { getVersionLabel } from './version.js';
 
@@ -187,14 +188,16 @@ export async function runDefaultAgent(
     numCtx: config.ollama.numCtx,
   });
   const registry = new ToolRegistry();
-  const statusTool = createGetJarvisStatusTool(config);
+  const tools = [createGetJarvisStatusTool(config), ...createFilesystemTools(config)];
 
-  registry.register(statusTool);
-  logger.info('tool.registered', {
-    toolName: statusTool.name,
-    permission: statusTool.permission,
-    timeoutMs: statusTool.timeoutMs,
-  });
+  for (const tool of tools) {
+    registry.register(tool);
+    logger.info('tool.registered', {
+      toolName: tool.name,
+      permission: tool.permission,
+      timeoutMs: tool.timeoutMs,
+    });
+  }
 
   const loop = new AgentLoop({
     client,
