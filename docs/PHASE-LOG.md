@@ -435,6 +435,24 @@ Interactive acceptance then ran in a real PowerShell terminal with genuine manua
 - A traversal write to `..\JarvisAgent\phase3b-escape.txt` was rejected with `path_traversal`; `D:\AI\JarvisAgent\phase3b-escape.txt` does not exist.
 - The accepted workspace files were preserved and not deleted.
 
+## Entry 10 — Phase 4 In-Progress Checkpoint (2026-11-07)
+
+Phase 4 implementation checkpoint established:
+
+- Subsystems implemented:
+  - 4A/4B Browser Automation: Chrome profile discovery, launch, session management via Playwriter 0.9.0, 27 browser tools, URL guard, DOM extraction, password rejection, and approval-gated form submission / file download.
+  - 4C Website Research & Crawling: `crawler.ts` and `robots-parser.ts` implementing bounded same-domain crawling (max 25 pages, max depth 2, 2-second rate limit).
+  - 4D Geo Search: `overpass-adapter.ts` querying OpenStreetMap data via Overpass API with mandatory ODbL 1.0 attribution. Google Maps separation policy enforced.
+  - 4E Excel Builder: `excel-builder.ts` generating 3-sheet XLSX workbooks (Businesses, Search Summary, Sources and Attribution) with read-back verification and overwrite rejection.
+  - 4F Desktop Automation: `desktop-manager.ts` and Python 3.12 sidecar (`tools/desktop/sidecar.py`) with `pywinauto 0.6.9` in `.venv`. 13 desktop tools for window inspection, control hierarchy, typing, and key/mouse interaction.
+- Verification status:
+  - `npm run typecheck`: PASSED.
+  - `npm run lint`: PASSED.
+  - `npm run format:check`: PASSED.
+  - `npm run build`: PASSED.
+  - Automated tests: 23 test files passed, 202 tests passed. 10 of 10 Phase 4 test files passed (47 tests).
+  - Live acceptance tests on real host environment pending for Chrome navigation, website crawling, Overpass queries, Excel export, and desktop Notepad interaction.
+
 ## Next entry
 
-Phase 3B is complete, live-tested, and published with `feat(filesystem): add approval-gated create and write tools`. Phase 4 (Playwriter browser automation) requires explicit user approval and a confirmed scope.
+Execute the 5 outstanding Phase 4 live acceptance tests on the host environment before declaring Phase 4 complete.

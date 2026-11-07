@@ -109,12 +109,19 @@ export function formatApprovalPrompt(request: ApprovalRequest): string {
     'JARVIS APPROVAL REQUIRED',
     '',
     `Operation: ${safeDisplay(request.operation)}`,
-    `Root: ${safeDisplay(request.root)}`,
-    `Relative path: ${safeDisplay(request.relativePath)}`,
-    `Absolute path: ${safeDisplay(request.absolutePath)}`,
-    `Action: ${safeDisplay(request.action)}`,
-    `Warning: ${safeDisplay(request.warning)}`,
   ];
+
+  if (request.root !== undefined) {
+    lines.push(`Root: ${safeDisplay(request.root)}`);
+  }
+  if (request.relativePath !== undefined) {
+    lines.push(`Relative path: ${safeDisplay(request.relativePath)}`);
+  }
+  if (request.absolutePath !== undefined) {
+    lines.push(`Absolute path: ${safeDisplay(request.absolutePath)}`);
+  }
+
+  lines.push(`Action: ${safeDisplay(request.action)}`, `Warning: ${safeDisplay(request.warning)}`);
 
   if (request.content !== undefined) {
     lines.push(

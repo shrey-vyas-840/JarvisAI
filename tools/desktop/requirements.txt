@@ -1,0 +1,7 @@
+# Pinned dependencies for JARVIS Windows Desktop Automation sidecar
+# Python 3.12 compatible
+comtypes==1.4.17
+pillow==13.0.0
+pywin32==312
+pywinauto==0.6.9
+six==1.17.0

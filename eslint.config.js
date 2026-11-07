@@ -6,7 +6,15 @@ const tsFiles = ['**/*.ts'];
 
 export default tseslint.config(
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**', 'data/**', 'logs/**'],
+    ignores: [
+      'node_modules/**',
+      'dist/**',
+      'coverage/**',
+      'data/**',
+      'logs/**',
+      'tools/desktop/.venv/**',
+      '**/.venv/**',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked.map((config) => ({

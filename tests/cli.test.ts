@@ -142,4 +142,23 @@ describe('cli', () => {
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr.join('')).toContain('Health check failed: bad config');
   });
+
+  it('runs browser profiles and browser status CLI commands', async () => {
+    const captured = captureIo();
+    const code = await runCli(['browser', 'profiles'], captured.io);
+    expect(code).toBe(0);
+    expect(captured.stdout.join('')).toContain('Discovered Profiles');
+
+    const statusCaptured = captureIo();
+    const statusCode = await runCli(['browser', 'status'], statusCaptured.io);
+    expect(statusCode).toBe(0);
+    expect(statusCaptured.stdout.join('')).toContain('Playwriter Relay at 127.0.0.1:19988');
+  });
+
+  it('runs desktop windows CLI command', async () => {
+    const captured = captureIo();
+    const code = await runCli(['desktop', 'windows'], captured.io);
+    expect(code).toBe(0);
+    expect(captured.stdout.join('')).toContain('Visible Desktop Windows');
+  });
 });

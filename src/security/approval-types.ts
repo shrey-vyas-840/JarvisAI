@@ -7,12 +7,12 @@ export interface ApprovalContent {
 export interface ApprovalRequest {
   readonly toolName: string;
   readonly operation: string;
-  readonly root: string;
-  readonly relativePath: string;
-  readonly absolutePath: string;
+  readonly root?: string | undefined;
+  readonly relativePath?: string | undefined;
+  readonly absolutePath?: string | undefined;
   readonly action: string;
   readonly warning: string;
-  readonly content?: ApprovalContent;
+  readonly content?: ApprovalContent | undefined;
 }
 
 export type ApprovalOutcome = 'approved' | 'denied' | 'cancelled' | 'unavailable';

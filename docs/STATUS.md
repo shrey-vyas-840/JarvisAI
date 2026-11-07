@@ -9,6 +9,7 @@ Last updated: 2026-11-07
 - Phase 2: complete.
 - Phase 3: complete; read-only filesystem tools implemented and verified.
 - Phase 3B: approval-gated `create_directory` and `write_text_file` implemented, unit/integration tested, and live-tested with manual interactive approval.
+- Phase 4: IN-PROGRESS checkpoint; browser automation, web research, OpenStreetMap adapter, Excel builder, and Windows desktop sidecar implemented and 100% unit-tested. Live host acceptance tests pending.
 
 ## What exists now
 
@@ -63,8 +64,8 @@ Last updated: 2026-11-07
 ## What does not exist yet
 
 - Overwrite, delete, move, rename, recursive directory creation, and binary-file writes.
-- Shell, browser, memory, voice, and UI features.
-- Phase 4 Playwriter browser integration.
+- Voice, local memory, creative image/video generation (Phase 5).
+- Live host acceptance for Phase 4 browser, crawler, Overpass, Excel export, and desktop automation.
 
 ## Safety state
 

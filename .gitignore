@@ -26,3 +26,12 @@ Thumbs.db
 
 # Temporary files
 *.tmp
+
+# Python virtual environment and bytecode
+tools/desktop/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Desktop and exports
+*.xlsx
