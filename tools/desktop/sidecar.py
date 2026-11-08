@@ -15,6 +15,15 @@ from typing import Dict, Any, List
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
+if sys.platform == "win32":
+    try:
+        import ctypes
+        hdesk = ctypes.windll.user32.OpenDesktopW("default", 0, False, 0x10000000)
+        if hdesk:
+            ctypes.windll.user32.SetThreadDesktop(hdesk)
+    except Exception:
+        pass
+
 try:
     from pywinauto import Desktop, Application
     from pywinauto.keyboard import send_keys

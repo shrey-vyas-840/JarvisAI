@@ -453,6 +453,28 @@ Phase 4 implementation checkpoint established:
   - Automated tests: 23 test files passed, 202 tests passed. 10 of 10 Phase 4 test files passed (47 tests).
   - Live acceptance tests on real host environment pending for Chrome navigation, website crawling, Overpass queries, Excel export, and desktop Notepad interaction.
 
+## 2026-11-08 — Phase 4 live acceptance complete
+
+All five outstanding Phase 4 live host tests were executed on the real Windows host and recorded as `LIVE_VERIFIED`.
+
+- **Chrome / Playwriter**: connected to `install:Chrome:1iuprv21hdwovw` (`vs.shrey@gmail.com`) through the relay at `127.0.0.1:19988`; listed the user's tab, opened a Jarvis tab, navigated to `https://example.com`, and extracted the title, URL, and body text.
+- **Windows Desktop**: listed 7 windows; launched Notepad, inspected handle `198384`, focused it, typed `JARVIS desktop acceptance test successful.`, and verified the exact text plus `42 characters` via UI Automation. No file was saved.
+- **OpenStreetMap**: with IPv4-first DNS, postal code `380061` and locality `Ghatlodia` returned 0 records; the Ahmedabad fallback returned 5 elements and 4 named records with ODbL 1.0 attribution and unfilled fields left `null`.
+- **Excel**: with explicit human approval, created `D:\AI\Exports\jarvis-phase4-acceptance.xlsx` (10,677 bytes; SHA-256 `42c0e159e4f3edb54b7d35c0be3025fd6833f68879d41edf85da2f3da852a326`); independent read-back confirmed 3 sheets, 4 business rows, summary, attribution, and overwrite rejection.
+- **Crawler**: evaluated 432 robots.txt rules and crawled `https://www.wikipedia.org/` in 784 ms (1 page, 8,899 characters); external language-subdomain links were skipped.
+
+### Phase 4 host verification
+
+```text
+npm run typecheck       PASSED
+npm run lint            PASSED
+npm run format:check    PASSED
+npm test                30 test files passed, 212 tests passed (2.68 s)
+npm run build           PASSED
+```
+
+Documented limitations: Overpass requires IPv4-first DNS on this host; OSM postcode/locality boundaries may be absent; `browser status` may show 0 extensions during a live connection; the Wikipedia crawl was limited to one page by external subdomain links. Untested interactions remain: browser click/fill/submit/download, multi-page crawl delay, Google Maps navigation, Chrome profile launch, tab switch/close, and desktop mouse actions.
+
 ## Next entry
 
-Execute the 5 outstanding Phase 4 live acceptance tests on the host environment before declaring Phase 4 complete.
+Phase 4 is live-verified and documented. Do not start Phase 5 without explicit user instruction.

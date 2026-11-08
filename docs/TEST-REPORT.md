@@ -1,5 +1,117 @@
 # Test Report
 
+## Phase 4 — 2026-11-08
+
+Status: **implementation, automated verification, and 5/5 live host acceptance tests complete**
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+npx tsx src/cli.ts browser status
+npx tsx src/cli.ts desktop windows
+npx tsx src/cli.ts agent "<Chrome / desktop / crawl acceptance prompts>"
+$env:NODE_OPTIONS="--dns-result-order=ipv4first"; npx tsx src/cli.ts agent "<Overpass acceptance prompt>"
+npx tsx src/cli.ts agent "<Excel export acceptance prompt>"
+```
+
+### Automated results (real Windows host)
+
+- `npm run typecheck` (`tsc --noEmit`): passed with no diagnostics.
+- `npm run lint` (`eslint .`): passed with no diagnostics.
+- `npm run format:check` (`prettier --check .`): passed; all matched files use Prettier style.
+- `npm test` (`vitest run`):
+  - Vitest `v5.1.0`.
+  - 30 test files passed.
+  - 212 tests passed.
+  - Duration: 2.68 s.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+- Note: earlier unprivileged sandbox runs reported 23 files / 202 tests because NTFS junction and loopback tests were blocked by sandbox permissions. The host result above is authoritative.
+
+### Live results
+
+All five tests were run on 2026-11-08 (IST) with `npx tsx` against the real host. **Result: 5/5 LIVE_VERIFIED.** Evidence is in `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\jarvis-acceptance\`.
+
+#### 1. Chrome / Playwriter — LIVE_VERIFIED
+
+- Relay 0.9.0 reachable at `127.0.0.1:19988`.
+- Connected to `install:Chrome:1iuprv21hdwovw` (Chrome, `vs.shrey@gmail.com`; Profile 4, the only profile with the extension).
+- Listed the user's OpenStreetMap tab, opened a Jarvis-owned tab (`tab-1`), navigated to `https://example.com`, and extracted:
+  - Title: `Example Domain`
+  - URL: `https://example.com/`
+  - Body text: multilingual "This domain is for use in documentation examples..." notice.
+- `BrowserManager.disconnect()` was called; the Jarvis tab was left open.
+- Evidence: `browser-result.json`.
+- Observations:
+  - `browser status` reported `Connected Chrome Extensions: 0` while `browser tabs` and live tools worked. The counter is unreliable; live tab operations are the authoritative signal.
+  - The acceptance script's PASS predicate expected older example.com wording (`illustrative examples`) and printed a warning. The extraction itself succeeded.
+
+#### 2. Windows Desktop / Notepad — LIVE_VERIFIED
+
+- `npx tsx src/cli.ts desktop windows` listed 7 real windows.
+- Launched Notepad (`desktop_launch_application`; launcher pid 10968, actual process 26312).
+- Targeted handle `198384` (`Untitled - Notepad`), inspected the control hierarchy, focused the window, and typed `JARVIS desktop acceptance test successful.`.
+- UI Automation verification:
+  - Document control title equals the typed text exactly.
+  - Status bar reports `42 characters`.
+  - Tab title reports `Modified.`
+- Screenshot: `D:\AI\Temp\phase4-desktop-notepad.png` (captured; not visually rendered by the agent).
+- No file was saved. The user's `*3D-websiteDesigns.txt - Notepad` tab was untouched.
+- The pre-existing `tools/desktop/sidecar.py` Win32 thread-desktop hardening was exercised successfully.
+
+#### 3. OpenStreetMap / Overpass — LIVE_VERIFIED (city fallback)
+
+- Host IPv6 connectivity is broken; the query ran with `NODE_OPTIONS=--dns-result-order=ipv4first`.
+- `area["postal_code"="380061"]` returned 0 records: OSM has no postal-code boundary for that area.
+- `area["name"="Ghatlodia"]` returned 0 records: no such area polygon exists in OSM.
+- Fallback `area["name"="Ahmedabad"]` + `amenity=restaurant`, limit 5:
+  - `totalRetrieved: 5`; `returnedCount: 4`; ~37.9 s.
+  - Vishala `node/440339381` (22.9936417, 72.5357058), Rajvadu Restaurant `node/440339389`, Mangaldas Ni Haveli `node/632066507`, Cafe Souq `node/1313805176`.
+  - Missing fields remained `null`; no values were invented.
+  - ODbL 1.0 attribution present.
+- Evidence: `osm-result-Ahmedabad.json`.
+
+#### 4. Approved Excel Export — LIVE_VERIFIED
+
+- Target: `D:\AI\Exports\jarvis-phase4-acceptance.xlsx` (did not exist beforehand).
+- The CLI displayed an approval request; the user explicitly approved creation.
+- Tool receipt:
+  - 10,677 bytes
+  - SHA-256 `42c0e159e4f3edb54b7d35c0be3025fd6833f68879d41edf85da2f3da852a326`
+  - Sheets: `Businesses`, `Search Summary`, `Sources and Attribution`
+  - `businessRowCount: 4`; sample `Vishala`; `verified: true`
+- Independent ExcelJS read-back confirmed:
+  - ZIP magic `504b0304`
+  - 4 data rows with expected headers, rows, lat/lon, and source URLs
+  - `Search Summary` 11 rows; attribution sheet present
+  - Overwrite rejected (`already_exists`)
+- Evidence: `export.mts` / `verify-xlsx.mts` logs.
+
+#### 5. Permitted Website Crawl — LIVE_VERIFIED (limited scope)
+
+- `https://www.wikipedia.org/robots.txt` redirects to `https://en.wikipedia.org/robots.txt` (28,028 bytes); 432 rules evaluated.
+- `research_website` on `https://www.wikipedia.org/` with `maxPages: 3`, `maxDepth: 1`:
+  - Crawled 1 page in 784 ms.
+  - Title `Wikipedia`; 8,899 characters extracted; not truncated.
+  - `robotsPolicy: "432 rule(s) evaluated"`.
+  - External language-subdomain links were skipped; same-domain boundary enforced.
+- Evidence: `research-result.json`.
+- Limitation: the portal page links almost entirely to external subdomains, so only one page was eligible; the 2-second inter-page delay was not exercised.
+
+### Not tested live
+
+- Browser click/fill/select, form submission, and downloads.
+- Multi-page crawl with an exercised rate-limit delay.
+- Interactive Google Maps navigation.
+- Chrome profile launch (new process) and tab switch/close.
+- Desktop mouse click/drag/move.
+
+These are recorded as untested interactions, not failures.
+
 ## Phase 3B — 2026-11-07
 
 Status: **implementation, automated verification, and interactive live acceptance complete (2026-11-07)**

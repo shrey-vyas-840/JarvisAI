@@ -1,6 +1,6 @@
 # JARVIS Status
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 
 ## Current position
 
@@ -9,7 +9,7 @@ Last updated: 2026-11-07
 - Phase 2: complete.
 - Phase 3: complete; read-only filesystem tools implemented and verified.
 - Phase 3B: approval-gated `create_directory` and `write_text_file` implemented, unit/integration tested, and live-tested with manual interactive approval.
-- Phase 4: IN-PROGRESS checkpoint; browser automation, web research, OpenStreetMap adapter, Excel builder, and Windows desktop sidecar implemented and 100% unit-tested. Live host acceptance tests pending.
+- Phase 4: live acceptance complete (2026-11-08); browser automation, web research, OpenStreetMap adapter, Excel builder, and Windows desktop sidecar implemented, unit-tested, and 5/5 live host tests LIVE_VERIFIED.
 
 ## What exists now
 
@@ -17,7 +17,7 @@ Last updated: 2026-11-07
 - Strict TypeScript configuration for type checking and a separate build configuration.
 - ESLint 10 flat configuration with type-aware TypeScript rules.
 - Prettier configuration and formatting check.
-- Vitest configuration and 175 passing tests across 21 files.
+- Vitest configuration and 212 passing tests across 30 files on the real host.
 - npm scripts for development, build, start, typecheck, lint, format, format check, and test.
 - Zod-validated configuration with safe local defaults, absolute path resolution, and optional `.env` loading.
 - Structured JSON logger with secret redaction, console/file output, level filtering, child bindings, and size-based rotation.
@@ -57,20 +57,28 @@ Last updated: 2026-11-07
   - A second write to existing `hello.txt` was rejected with `already_exists`; no overwrite occurred.
   - A traversal write to `..\JarvisAgent\phase3b-escape.txt` was rejected with `path_traversal`; the external file does not exist.
   - The accepted workspace files were preserved and not deleted.
-- Latest health run: `Overall: WARNING` because the Playwriter relay is not running; 7 of 8 checks OK, all others passed, exit code `0` for text and JSON output.
-- Git repository on branch `main`, published to GitHub; Phase 1 commit `49aa18fc6660d1aa5f7f06d1aed5c5ac530395bb`; Phase 2 commit `59c6b10fc7a1871d22e7c52497f18f6b64b900bb`; Phase 3 commit `e713aea` preserved. The Phase 3B increment is committed after live acceptance with `feat(filesystem): add approval-gated create and write tools`.
-- Documentation baseline, Phase 2 handoff, Phase 3 handoff/status, Phase 3 completion records, `docs/SECURITY.md`, and `docs/PHASE-3B-HANDOFF.md`.
+- Latest health run (2026-11-08): `Overall: OK`; all 8 checks passed, including the Playwriter relay at `127.0.0.1:19988`; exit code `0` for text and JSON output.
+- Phase 4 live acceptance (2026-11-08):
+  - Chrome/Playwriter: connected to profile `vs.shrey@gmail.com`, listed and opened tabs, and navigated to `https://example.com` with title, URL, and body text extracted.
+  - Windows desktop: launched Notepad, inspected and focused handle `198384`, typed `JARVIS desktop acceptance test successful.`, and verified the exact text plus `42 characters` through UI Automation; no file saved.
+  - OpenStreetMap: Ahmedabad fallback returned 5 elements and 4 named records with locations, null-preserving fields, and ODbL 1.0 attribution; postcode `380061` and `Ghatlodia` have no OSM boundary data.
+  - Excel: after explicit approval, created `D:\AI\Exports\jarvis-phase4-acceptance.xlsx` (10,677 bytes; SHA-256 `42c0e159e4f3edb54b7d35c0be3025fd6833f68879d41edf85da2f3da852a326`); read-back verified 3 sheets, 4 business rows, summary, attribution, and overwrite rejection.
+  - Crawler: evaluated 432 robots.txt rules and crawled `https://www.wikipedia.org/` (1 page, 8,899 characters, 784 ms) with same-domain boundaries enforced.
+- Phase 4 host verification: typecheck, lint, format check, and build passed; `npm test` reported 30 files and 212 tests passing.
+- Git repository on branch `main`, published to GitHub; Phase 1 commit `49aa18fc6660d1aa5f7f06d1aed5c5ac530395bb`; Phase 2 commit `59c6b10fc7a1871d22e7c52497f18f6b64b900bb`; Phase 3 commit `e713aea` preserved; Phase 4 implementation checkpoint `86b6ea83c818a1896f6bf928b6779623e81c720d`.
+- Documentation baseline, Phase 2 handoff, Phase 3 handoff/status, Phase 3 completion records, `docs/SECURITY.md`, `docs/PHASE-3B-HANDOFF.md`, `docs/PHASE-4-HANDOFF.md`, and `docs/DATA-SOURCES.md`.
 
 ## What does not exist yet
 
 - Overwrite, delete, move, rename, recursive directory creation, and binary-file writes.
 - Voice, local memory, creative image/video generation (Phase 5).
-- Live host acceptance for Phase 4 browser, crawler, Overpass, Excel export, and desktop automation.
+- Live testing of browser click/fill/submit/download, multi-page crawl rate delay, Google Maps navigation, Chrome profile launch, tab switch/close, and desktop mouse actions.
+- OSM postcode/locality boundaries for `380061` and `Ghatlodia`; Overpass on this host requires IPv4-first DNS.
 
 ## Safety state
 
 - Phase 1 health checks perform only read-only local operations.
-- The registered tools are five read-only tools plus two approval-gated tools: `get_jarvis_status`, `list_directory`, `read_text_file`, `search_text`, `get_file_info`, `create_directory`, and `write_text_file`.
+- Registered tools comprise the read-only diagnostic/filesystem tools, the two approval-gated filesystem writes, and the Phase 4 browser, research, geo, Excel, and desktop tools.
 - The read-only filesystem tools are `list_directory`, `read_text_file`, `search_text`, and `get_file_info`.
 - `create_directory` and `write_text_file` require explicit per-operation approval and never overwrite existing paths.
 - Filesystem tools accept only the `workspace` and `exports` root identifiers and relative paths.
@@ -87,4 +95,8 @@ Last updated: 2026-11-07
 - The interactive Phase 3B acceptance created `phase3b-acceptance-dir`, `hello.txt`, and `hello-exact.txt` only after explicit manual approval.
 - The negative overwrite and traversal acceptance attempts made no changes; the traversal target outside the root does not exist.
 - Interactive positive write acceptance is complete, and the accepted workspace files are preserved.
+- The Playwriter relay binds only to loopback `127.0.0.1`; the live browser connection used the loopback relay.
+- The live Excel export required explicit human approval, created only the approved new file, and rejected a second write to the same path.
+- The live desktop test typed into an unsaved Notepad document and did not save a file; the user's other Notepad tab was untouched.
+- OpenStreetMap output retained ODbL 1.0 attribution and left unavailable fields `null` instead of inventing values.
 - No secrets are stored in source, documentation, logs, or Git.
