@@ -16,6 +16,7 @@ const ENV_KEYS = [
   'JARVIS_TEMP',
   'OLLAMA_BASE_URL',
   'OLLAMA_MODEL',
+  'OLLAMA_VISION_MODEL',
   'OLLAMA_NUM_CTX',
   'OLLAMA_THINK',
 ] as const;
@@ -32,6 +33,7 @@ describe('configuration', () => {
     expect(config.paths.temp.endsWith('Temp')).toBe(true);
     expect(config.ollama.baseUrl).toBe('http://127.0.0.1:11434');
     expect(config.ollama.model).toBe('qwen3.5:9b');
+    expect(config.ollama.visionModel).toBe('qwen3.5:9b');
     expect(config.ollama.numCtx).toBe(4096);
     expect(config.ollama.think).toBe(false);
   });
@@ -47,6 +49,7 @@ describe('configuration', () => {
         JARVIS_TEMP: 'D:\\Work\\Temp',
         OLLAMA_BASE_URL: 'http://localhost:11434',
         OLLAMA_MODEL: 'test-model',
+        OLLAMA_VISION_MODEL: 'test-vision-model',
         OLLAMA_NUM_CTX: '8192',
         OLLAMA_THINK: 'true',
       },
@@ -61,6 +64,7 @@ describe('configuration', () => {
     expect(config.paths.temp).toBe('D:\\Work\\Temp');
     expect(config.ollama.baseUrl).toBe('http://localhost:11434');
     expect(config.ollama.model).toBe('test-model');
+    expect(config.ollama.visionModel).toBe('test-vision-model');
     expect(config.ollama.numCtx).toBe(8192);
     expect(config.ollama.think).toBe(true);
   });
@@ -103,6 +107,7 @@ describe('configuration', () => {
       const config = loadConfig({ loadDotEnv: true, envFile });
 
       expect(config.ollama.model).toBe('from-dotenv');
+      expect(config.ollama.visionModel).toBe('from-dotenv');
       expect(config.ollama.think).toBe(true);
     } finally {
       for (const key of ENV_KEYS) {

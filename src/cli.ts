@@ -1,7 +1,16 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { BrowserManager, discoverChromeProfiles, RelayManager } from './browser/index.js';
+import {
+  BrowserError,
+  BrowserManager,
+  discoverChromeExtensions,
+  discoverChromeProfiles,
+  readPngDimensions,
+  RelayManager,
+} from './browser/index.js';
 import { loadConfig, type AppConfig } from './config.js';
 import { AgentLoop, type AgentRunResult } from './core/agent-loop.js';
 import { ToolRegistry } from './core/tool-registry.js';
@@ -19,6 +28,7 @@ import { createGeoTools } from './tools/geo/index.js';
 import { createGetJarvisStatusTool } from './tools/get-jarvis-status.js';
 import { createResearchTools } from './tools/research/index.js';
 import { getVersionLabel } from './version.js';
+import { mapImageRectToScreen, VisionAnalyzer } from './vision/index.js';
 
 export interface CliIo {
   stdout: (text: string) => void;
@@ -47,10 +57,19 @@ Commands:
   health                Run read-only environment health checks
   browser <subcommand>  Inspect browser profiles and relay status
     profiles            List discovered Chrome profiles on this PC
+    extensions          List installed Chrome extension metadata
     status              Check Playwriter relay connectivity & extensions
+    readiness           Verify the browser session with a harmless read
     tabs                List open tabs in the connected Chrome profile
   desktop <subcommand>  Windows desktop automation commands
     windows             List visible top-level application windows
+    screen-info         Show virtual screen bounds, DPI, and scaling
+    screenshot [name]   Capture the desktop into D:\\AI\\Temp
+    vision "<target>"   Locate visible elements with the local vision model
+  vision <subcommand>   Local vision diagnostics
+    check               Verify the configured Ollama model supports images
+    analyze <png> "<target>"
+                        Analyze a local PNG inside the approved directories
   agent <text>          Run the local AI agent with all registered tools
                         Consequential actions require interactive approval
   help                  Show this help
@@ -105,6 +124,10 @@ export async function runCli(
     return runDesktopCommand(options, io);
   }
 
+  if (command === 'vision') {
+    return runVisionCommand(options, io);
+  }
+
   if (command === 'agent') {
     return runAgentCommand(options, io, dependencies);
   }
@@ -122,19 +145,64 @@ async function runBrowserCommand(options: readonly string[], io: CliIo): Promise
     io.stdout(
       `Playwriter Relay at ${status.host}:${String(status.port)}: ${status.running ? 'RUNNING' : 'OFFLINE'}\n`,
     );
+    io.stdout(`Relay Port Listening: ${status.listening ? 'YES' : 'NO'}\n`);
     if (status.version) {
       io.stdout(`Relay Version: ${status.version}\n`);
     }
-    io.stdout(`Connected Chrome Extensions: ${String(status.connectedExtensions)}\n`);
-    if (status.running) {
-      const extensions = await relay.listConnectedExtensions();
-      for (const ext of extensions) {
-        io.stdout(
-          `  - [${ext.id}] ${ext.browser} (email: ${ext.email ?? 'none'}, active tabs: ${String(ext.activeTabs)})\n`,
-        );
+    io.stdout(
+      `Connected Chrome Extensions: ${status.connectedExtensions === null ? 'unknown' : String(status.connectedExtensions)}\n`,
+    );
+    if (status.extensionStatusError) {
+      io.stdout(`Extension Status: ${status.extensionStatusError}\n`);
+    }
+    if (status.running && status.connectedExtensions !== null && status.connectedExtensions > 0) {
+      try {
+        const extensions = await relay.listConnectedExtensions();
+        for (const ext of extensions) {
+          io.stdout(
+            `  - [${ext.id}] ${ext.browser} (email: ${ext.email ?? 'none'}, active tabs: ${String(ext.activeTabs)})\n`,
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        io.stdout(`Extension Inventory: ${message}\n`);
       }
     }
     return 0;
+  }
+
+  if (subcommand === 'readiness') {
+    const browser = new BrowserManager();
+    try {
+      const report = await browser.verifyReadiness();
+      const readiness = report.readiness;
+      io.stdout(
+        `Browser Readiness: READY (${String(report.elapsedMs)}ms, ${String(report.attempts)} attempt(s))\n`,
+      );
+      io.stdout(
+        `Relay: ${readiness.relayRunning ? 'RUNNING' : 'OFFLINE'} (listening: ${readiness.relayListening ? 'YES' : 'NO'}, version: ${readiness.relayVersion ?? 'unknown'})\n`,
+      );
+      io.stdout(
+        `Connected Chrome Extensions: ${readiness.extensionCount === null ? 'unknown' : String(readiness.extensionCount)}\n`,
+      );
+      io.stdout(`Selected Browser: ${readiness.selectedBrowserId ?? 'none'}\n`);
+      io.stdout(
+        `Enabled Tabs: ${String(readiness.enabledTabs)} (responsive: ${String(readiness.responsiveTabs)})\n`,
+      );
+      io.stdout(`Session Ready: ${readiness.sessionReady ? 'YES' : 'NO'}\n`);
+      io.stdout(`Last Successful Operation: ${readiness.lastSuccessfulOperation ?? 'none'}\n`);
+      io.stdout(`Recovery Attempts: ${String(readiness.recoveryAttempts)}\n`);
+      if (readiness.lastError) {
+        io.stdout(`Last Error: ${readiness.lastError}\n`);
+      }
+      await browser.disconnect();
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const code = error instanceof BrowserError ? error.code : 'unknown';
+      io.stderr(`Browser not ready [${code}]: ${message}\n`);
+      return 1;
+    }
   }
 
   if (subcommand === 'profiles') {
@@ -152,6 +220,19 @@ async function runBrowserCommand(options: readonly string[], io: CliIo): Promise
     return 0;
   }
 
+  if (subcommand === 'extensions') {
+    const discovery = discoverChromeExtensions();
+    io.stdout(`User Data Directory: ${discovery.userDataDir}\n`);
+    io.stdout(`Installed Extensions (${String(discovery.extensions.length)}):\n`);
+    for (const extension of discovery.extensions) {
+      const tags = extension.isPlaywriter ? ' [Playwriter]' : '';
+      io.stdout(
+        `  * ${extension.profileDirectory}: ${extension.name} v${extension.version} [${extension.id}]${tags}\n`,
+      );
+    }
+    return 0;
+  }
+
   if (subcommand === 'tabs') {
     const browser = new BrowserManager();
     try {
@@ -161,23 +242,29 @@ async function runBrowserCommand(options: readonly string[], io: CliIo): Promise
       for (const tab of tabs) {
         const cur = tab.isCurrent ? '*' : ' ';
         const jarvisTag = tab.isJarvisOwned ? '[JARVIS]' : '[USER]';
-        io.stdout(` ${cur} [${String(tab.index)}] ${tab.title} (${tab.url}) ${jarvisTag}\n`);
+        const stateTag = tab.responsive ? '' : ' [UNRESPONSIVE]';
+        io.stdout(
+          ` ${cur} [${String(tab.index)}] ${tab.title || '(no title)'} (${tab.url || 'no url'}) ${jarvisTag}${stateTag}\n`,
+        );
       }
       await browser.disconnect();
       return 0;
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
-      io.stderr(`Failed to list tabs: ${msg}\n`);
+      const code = error instanceof BrowserError ? ` [${error.code}]` : '';
+      io.stderr(`Failed to list tabs${code}: ${msg}\n`);
       return 1;
     }
   }
 
-  io.stderr(`Unknown browser subcommand: ${subcommand}\nAvailable: profiles, status, tabs\n`);
+  io.stderr(
+    `Unknown browser subcommand: ${subcommand}\nAvailable: profiles, extensions, status, readiness, tabs\n`,
+  );
   return 1;
 }
 
 async function runDesktopCommand(options: readonly string[], io: CliIo): Promise<number> {
-  const [subcommand] = options;
+  const [subcommand, ...rest] = options;
 
   if (!subcommand || subcommand === 'windows') {
     const desktop = new DesktopManager();
@@ -199,8 +286,180 @@ async function runDesktopCommand(options: readonly string[], io: CliIo): Promise
     }
   }
 
-  io.stderr(`Unknown desktop subcommand: ${subcommand}\nAvailable: windows\n`);
+  if (subcommand === 'screen-info') {
+    const desktop = new DesktopManager();
+    try {
+      const info = await desktop.getScreenInfo();
+      io.stdout(`${JSON.stringify(info, null, 2)}\n`);
+      desktop.dispose();
+      return 0;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      io.stderr(`Failed to read screen info: ${msg}\n`);
+      desktop.dispose();
+      return 1;
+    }
+  }
+
+  if (subcommand === 'screenshot') {
+    const desktop = new DesktopManager();
+    try {
+      const config = loadConfig();
+      const filename = (rest.join(' ').trim() || `desktop-${String(Date.now())}.png`).replace(
+        /[^a-zA-Z0-9_.-]/g,
+        '_',
+      );
+      const result = await desktop.captureScreenshot({
+        path: path.join(
+          config.paths.temp,
+          filename.endsWith('.png') ? filename : `${filename}.png`,
+        ),
+      });
+      io.stdout(
+        `Captured ${String(result.image_width)}x${String(result.image_height)} screenshot to ${result.saved_path ?? 'memory'}\n`,
+      );
+      desktop.dispose();
+      return 0;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      io.stderr(`Failed to capture screenshot: ${msg}\n`);
+      desktop.dispose();
+      return 1;
+    }
+  }
+
+  if (subcommand === 'vision') {
+    const target = rest.join(' ').trim();
+
+    if (target.length === 0) {
+      io.stderr('Usage: jarvis desktop vision "<element description>"\n');
+      return 1;
+    }
+
+    const desktop = new DesktopManager();
+    try {
+      const config = loadConfig();
+      const analyzer = new VisionAnalyzer({
+        baseUrl: config.ollama.baseUrl,
+        model: config.ollama.visionModel,
+      });
+      const capture = await desktop.captureScreenshot({ includeImage: true, maxDimension: 1600 });
+
+      if (capture.image_base64 === undefined) {
+        throw new Error('Desktop capture did not include image data.');
+      }
+
+      const analysis = await analyzer.analyze({
+        imageBase64: capture.image_base64,
+        imageWidth: capture.image_width,
+        imageHeight: capture.image_height,
+        target,
+        contextLabel: 'Windows desktop',
+      });
+
+      io.stdout(
+        `Local vision model: ${analysis.model} (${String(analysis.elapsedMs)} ms, ${String(analysis.elements.length)} elements)\n`,
+      );
+
+      for (const element of analysis.elements) {
+        const rect = mapImageRectToScreen(
+          {
+            x: element.x,
+            y: element.y,
+            width: element.width,
+            height: element.height,
+          },
+          {
+            imageWidth: capture.image_width,
+            imageHeight: capture.image_height,
+            originalWidth: capture.original_width,
+            originalHeight: capture.original_height,
+            screenOriginX: capture.screen_origin_x,
+            screenOriginY: capture.screen_origin_y,
+          },
+        );
+        const confidence = element.confidence === undefined ? 'n/a' : element.confidence.toFixed(2);
+        io.stdout(
+          `  * "${element.label}" role=${element.role ?? 'unknown'} confidence=${confidence} center=(${String(rect.x + Math.floor(rect.width / 2))}, ${String(rect.y + Math.floor(rect.height / 2))})\n`,
+        );
+      }
+
+      desktop.dispose();
+      return 0;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      io.stderr(`Vision locate failed: ${msg}\n`);
+      desktop.dispose();
+      return 1;
+    }
+  }
+
+  io.stderr(
+    `Unknown desktop subcommand: ${subcommand}\nAvailable: windows, screen-info, screenshot, vision\n`,
+  );
   return 1;
+}
+
+async function runVisionCommand(options: readonly string[], io: CliIo): Promise<number> {
+  const [subcommand, ...rest] = options;
+
+  try {
+    const config = loadConfig();
+    const analyzer = new VisionAnalyzer({
+      baseUrl: config.ollama.baseUrl,
+      model: config.ollama.visionModel,
+    });
+
+    if (!subcommand || subcommand === 'check') {
+      const capability = await analyzer.getCapability();
+      io.stdout(`Vision Model: ${capability.model}\n`);
+      io.stdout(`Vision Supported: ${capability.supported ? 'YES' : 'NO'}\n`);
+      io.stdout(`Capabilities: ${capability.capabilities.join(', ') || 'none reported'}\n`);
+      return capability.supported ? 0 : 1;
+    }
+
+    if (subcommand === 'analyze') {
+      const [fileArgument, ...targetParts] = rest;
+      const target = targetParts.join(' ').trim();
+
+      if (!fileArgument || target.length === 0) {
+        io.stderr('Usage: jarvis vision analyze <png-path> "<element description>"\n');
+        return 1;
+      }
+
+      const filePath = path.resolve(fileArgument);
+      const allowedRoots = [config.paths.temp, config.paths.workspace, config.paths.exports];
+      const isAllowed = allowedRoots.some((root) => {
+        const relative = path.relative(path.resolve(root), filePath);
+        return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+      });
+
+      if (!isAllowed) {
+        io.stderr('Image path must be inside JARVIS_TEMP, JARVIS_WORKSPACE, or JARVIS_EXPORTS.\n');
+        return 1;
+      }
+
+      const buffer = readFileSync(filePath);
+      const dimensions = readPngDimensions(buffer);
+      const analysis = await analyzer.analyze({
+        imageBase64: buffer.toString('base64'),
+        imageWidth: dimensions.width,
+        imageHeight: dimensions.height,
+        target,
+        contextLabel: `image ${path.basename(filePath)}`,
+      });
+
+      io.stdout(`${JSON.stringify(analysis, null, 2)}\n`);
+      return 0;
+    }
+
+    io.stderr(`Unknown vision subcommand: ${subcommand}\nAvailable: check, analyze\n`);
+    return 1;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    io.stderr(`Vision command failed: ${message}\n`);
+    return 1;
+  }
 }
 
 async function runHealthCommand(

@@ -59,6 +59,7 @@ const envSchema = z.object({
   JARVIS_TEMP: pathFromEnv.default(defaultTemp),
   OLLAMA_BASE_URL: ollamaBaseUrlFromEnv,
   OLLAMA_MODEL: z.string().trim().min(1).default('qwen3.5:9b'),
+  OLLAMA_VISION_MODEL: z.string().trim().min(1).optional(),
   OLLAMA_NUM_CTX: z.coerce.number().int().min(512).max(131072).default(4096),
   OLLAMA_THINK: booleanFromEnv,
 });
@@ -72,6 +73,7 @@ export const configSchema = envSchema.transform((env) => ({
   ollama: {
     baseUrl: env.OLLAMA_BASE_URL,
     model: env.OLLAMA_MODEL,
+    visionModel: env.OLLAMA_VISION_MODEL ?? env.OLLAMA_MODEL,
     numCtx: env.OLLAMA_NUM_CTX,
     think: env.OLLAMA_THINK,
   },

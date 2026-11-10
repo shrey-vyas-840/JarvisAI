@@ -9,7 +9,13 @@ describe('Windows Desktop Automation Tools', () => {
   const mockConfig: AppConfig = {
     appEnv: 'test',
     log: { level: 'info', dir: 'D:\\AI\\JarvisAgent\\logs' },
-    ollama: { baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b', numCtx: 4096, think: false },
+    ollama: {
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'qwen3.5:9b',
+      visionModel: 'qwen3.5:9b',
+      numCtx: 4096,
+      think: false,
+    },
     paths: {
       workspace: 'D:\\AI\\JarvisWorkspace',
       exports: 'D:\\AI\\Exports',
@@ -42,15 +48,19 @@ describe('Windows Desktop Automation Tools', () => {
       .mockResolvedValue({ launched: true, application: 'notepad', pid: 1234 }),
   };
 
-  it('registers all 13 desktop automation tools', () => {
+  it('registers all 17 desktop automation tools', () => {
     const tools = createDesktopTools({
       desktopManager: mockDesktopManager as DesktopManager,
       config: mockConfig,
     });
 
-    expect(tools.length).toBe(13);
+    expect(tools.length).toBe(17);
     const names = new Set(tools.map((t) => t.name));
 
+    expect(names.has('desktop_get_screen_info')).toBe(true);
+    expect(names.has('desktop_wait_for_window')).toBe(true);
+    expect(names.has('desktop_vision_locate')).toBe(true);
+    expect(names.has('desktop_vision_click')).toBe(true);
     expect(names.has('desktop_list_windows')).toBe(true);
     expect(names.has('desktop_inspect_window')).toBe(true);
     expect(names.has('desktop_focus_window')).toBe(true);
@@ -64,6 +74,66 @@ describe('Windows Desktop Automation Tools', () => {
     expect(names.has('desktop_mouse_drag')).toBe(true);
     expect(names.has('desktop_capture_screenshot')).toBe(true);
     expect(names.has('desktop_launch_application')).toBe(true);
+  });
+
+  it('maps vision candidates to physical screen coordinates before clicking', async () => {
+    const capture = vi.fn().mockResolvedValue({
+      captured: true,
+      width: 1000,
+      height: 1000,
+      image_width: 1000,
+      image_height: 1000,
+      original_width: 2000,
+      original_height: 2000,
+      screen_origin_x: 100,
+      screen_origin_y: 200,
+      scale_x: 2,
+      scale_y: 2,
+      saved_path: null,
+      image_base64: 'iVBORw0KGgo=',
+    });
+    const mouseClick = vi
+      .fn()
+      .mockResolvedValue({ clicked: true, x: 340, y: 320, target_window: 'Notepad' });
+    const analyze = vi.fn().mockResolvedValue({
+      model: 'qwen3.5:9b',
+      summary: null,
+      elapsedMs: 5,
+      invalidElementCount: 0,
+      elements: [
+        {
+          x: 100,
+          y: 50,
+          width: 40,
+          height: 20,
+          label: 'Save button',
+          role: 'button',
+          confidence: 0.9,
+        },
+      ],
+    });
+
+    const tools = createDesktopTools({
+      desktopManager: { captureScreenshot: capture, mouseClick } as unknown as DesktopManager,
+      visionAnalyzer: { analyze } as unknown as import('../../src/vision/index.js').VisionAnalyzer,
+      config: mockConfig,
+    });
+    const tool = tools.find((t) => t.name === 'desktop_vision_click');
+    expect(tool).toBeDefined();
+    if (!tool) return;
+
+    const result = (await tool.execute(
+      { target: 'the save button', min_confidence: 0.5 },
+      {} as ToolExecutionContext,
+    )) as { clicked: boolean; screenCoordinates: { x: number; y: number }; verification: string };
+
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(mouseClick).toHaveBeenCalledWith(
+      expect.objectContaining({ x: 340, y: 320, button: undefined, double: undefined }),
+    );
+    expect(result.clicked).toBe(true);
+    expect(result.screenCoordinates).toEqual({ x: 340, y: 320 });
+    expect(result.verification).toBe('not_applicable');
   });
 
   it('enforces strict application allowlist in desktop_launch_application', async () => {

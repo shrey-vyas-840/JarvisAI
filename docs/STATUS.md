@@ -1,6 +1,6 @@
 # JARVIS Status
 
-Last updated: 2026-11-08
+Last updated: 2026-11-10
 
 ## Current position
 
@@ -10,6 +10,7 @@ Last updated: 2026-11-08
 - Phase 3: complete; read-only filesystem tools implemented and verified.
 - Phase 3B: approval-gated `create_directory` and `write_text_file` implemented, unit/integration tested, and live-tested with manual interactive approval.
 - Phase 4: live acceptance complete (2026-11-08); browser automation, web research, OpenStreetMap adapter, Excel builder, and Windows desktop sidecar implemented, unit-tested, and 5/5 live host tests LIVE_VERIFIED.
+- Phase 5: implementation complete and host gate green (2026-11-10); local Ollama vision, screenshot capture, extension discovery, browser session readiness/recovery, and `desktop_vision_click` are implemented and tested. Desktop live Tests 1–3 are LIVE_VERIFIED; browser live Test 4 is LIVE_VERIFIED. Browser Test 5 (extension report workflow) is BLOCKED_BY_MANUAL_ACTION because no suitable extension is installed.
 
 ## What exists now
 
@@ -17,7 +18,7 @@ Last updated: 2026-11-08
 - Strict TypeScript configuration for type checking and a separate build configuration.
 - ESLint 10 flat configuration with type-aware TypeScript rules.
 - Prettier configuration and formatting check.
-- Vitest configuration and 212 passing tests across 30 files on the real host.
+- Vitest configuration and 230 passing tests across 34 files on the real host.
 - npm scripts for development, build, start, typecheck, lint, format, format check, and test.
 - Zod-validated configuration with safe local defaults, absolute path resolution, and optional `.env` loading.
 - Structured JSON logger with secret redaction, console/file output, level filtering, child bindings, and size-based rotation.
@@ -65,14 +66,24 @@ Last updated: 2026-11-08
   - Excel: after explicit approval, created `D:\AI\Exports\jarvis-phase4-acceptance.xlsx` (10,677 bytes; SHA-256 `42c0e159e4f3edb54b7d35c0be3025fd6833f68879d41edf85da2f3da852a326`); read-back verified 3 sheets, 4 business rows, summary, attribution, and overwrite rejection.
   - Crawler: evaluated 432 robots.txt rules and crawled `https://www.wikipedia.org/` (1 page, 8,899 characters, 784 ms) with same-domain boundaries enforced.
 - Phase 4 host verification: typecheck, lint, format check, and build passed; `npm test` reported 30 files and 212 tests passing.
+- Phase 5 host verification (2026-11-10): typecheck, lint, format check, and build passed; `npm test` reported 35 files and 245 tests passing.
+- Phase 5 desktop live acceptance:
+  - Notepad typing/read-back: a dedicated empty temp file was typed with `JARVIS Phase 5 safe notepad test 1794208064352` (46 characters); UI Automation read-back matched exactly; the disposable tab was closed and the temp file deleted.
+  - Local vision accuracy: Qwen 3.5 9B located the Notepad “Edit” menu with confidence 0.98 at a 7 px center error versus UI Automation; inference took 4.34 s.
+  - Observe→act→verify: `desktop_vision_click` captured fresh, clicked the located Edit menu once at screen `(1254, 210)`, re-captured, and UI Automation confirmed the menu opened (`Undo`, `Cut`, `Copy`, `Paste`, `Find`, `Replace`, and more). Action latency 4.7 s; no automatic retry.
+- Phase 5 vision coordinate protocol: the model returns normalized 0–1000 coordinates; the analyzer validates them on that grid, converts to image pixels, and drops out-of-grid rectangles. This fixed offset/out-of-bounds clicks caused by treating normalized values as pixels.
+- Phase 5 browser reliability (2026-11-10): `browser status` now parses the relay's actual `/extensions/status` payload and reports `unknown` instead of a false `0` when inventory fails. Active-tab selection now skips unresponsive targets (an attached ChatGPT target with an empty URL and a non-resolving `title()` caused hangs), all title reads are bounded, a readiness check proves the session with a harmless read, and stale-session navigation retries once after reconnecting.
+- Phase 5 browser live acceptance (2026-11-10): readiness READY in 870 ms; `browser tabs` completed in 2.6 s; navigate to `https://example.com/` returned `Example Domain`; a JARVIS-owned `https://example.org/` tab opened and closed cleanly; readiness recheck READY in 187 ms.
+- Phase 5 is uncommitted on `main`; no Phase 5 commit has been created.
 - Git repository on branch `main`, published to GitHub; Phase 1 commit `49aa18fc6660d1aa5f7f06d1aed5c5ac530395bb`; Phase 2 commit `59c6b10fc7a1871d22e7c52497f18f6b64b900bb`; Phase 3 commit `e713aea` preserved; Phase 4 implementation checkpoint `86b6ea83c818a1896f6bf928b6779623e81c720d`.
 - Documentation baseline, Phase 2 handoff, Phase 3 handoff/status, Phase 3 completion records, `docs/SECURITY.md`, `docs/PHASE-3B-HANDOFF.md`, `docs/PHASE-4-HANDOFF.md`, and `docs/DATA-SOURCES.md`.
 
 ## What does not exist yet
 
 - Overwrite, delete, move, rename, recursive directory creation, and binary-file writes.
-- Voice, local memory, creative image/video generation (Phase 5).
-- Live testing of browser click/fill/submit/download, multi-page crawl rate delay, Google Maps navigation, Chrome profile launch, tab switch/close, and desktop mouse actions.
+- A live extension report/PDF workflow: no suitable audit/report extension is installed in the inspected profiles.
+- Voice, local memory, creative image/video generation.
+- Live testing of browser click/fill/submit/download, multi-page crawl rate delay, Google Maps navigation, Chrome profile launch, switching to a user tab, and desktop mouse buttons other than left click.
 - OSM postcode/locality boundaries for `380061` and `Ghatlodia`; Overpass on this host requires IPv4-first DNS.
 
 ## Safety state
@@ -99,4 +110,8 @@ Last updated: 2026-11-08
 - The live Excel export required explicit human approval, created only the approved new file, and rejected a second write to the same path.
 - The live desktop test typed into an unsaved Notepad document and did not save a file; the user's other Notepad tab was untouched.
 - OpenStreetMap output retained ODbL 1.0 attribution and left unavailable fields `null` instead of inventing values.
+- Phase 5 local vision sends screenshots only to the local Ollama endpoint; vision-only captures are not persisted, and vision rectangles outside the valid grid are dropped rather than clamped.
+- `desktop_vision_click` performs at most one click per call, re-observes afterward, and never auto-repeats a click; missing confidence fails closed.
+- A pre-existing Windows 11 Notepad user tab was affected by the first live attempt because Notepad is single-instance. The original 646-character buffer was restored exactly from evidence, the test text was removed, the clipboard was cleared, and the buffer was never saved; the on-disk file was untouched.
+- All later Notepad tests use a dedicated empty temp file, verify it is empty before typing, and delete the temp file afterward.
 - No secrets are stored in source, documentation, logs, or Git.

@@ -475,6 +475,66 @@ npm run build           PASSED
 
 Documented limitations: Overpass requires IPv4-first DNS on this host; OSM postcode/locality boundaries may be absent; `browser status` may show 0 extensions during a live connection; the Wikipedia crawl was limited to one page by external subdomain links. Untested interactions remain: browser click/fill/submit/download, multi-page crawl delay, Google Maps navigation, Chrome profile launch, tab switch/close, and desktop mouse actions.
 
+## 2026-11-09 — Phase 5 implementation and desktop live acceptance
+
+Phase 5 baseline implemented from the interrupted session and recovered:
+
+- Local-only Ollama vision analyzer with capability probe, JSON-schema output, Zod validation, normalized-coordinate conversion, and bounds filtering.
+- Desktop screenshot capture with DPI-aware window origin/scale metadata, optional vision downscaling, and base64 transport.
+- `desktop_vision_locate` and new `desktop_vision_click` (fresh capture → confidence gate → one click → re-capture → optional second vision verification; never auto-repeats).
+- Browser vision locate/click, extension discovery, PNG dimension parsing, per-action desktop timeouts, new CLI commands, and system-prompt observe/act/verify guidance.
+- Fixed the interrupted session's 4 lint errors and Prettier violations.
+- Fixed sidecar `mouse_click`: `pywinauto 0.6.9` rejects a `double` keyword, so double clicks now use `double_click()` and right clicks use `right_click()`.
+
+### Phase 5 host verification
+
+```text
+npm run typecheck       PASSED
+npm run lint            PASSED
+npm run format:check    PASSED
+npm test                34 test files passed, 230 tests passed (2.56 s)
+npm run build           PASSED
+```
+
+### Phase 5 live results
+
+- **Desktop typing/read-back — LIVE_VERIFIED:** dedicated empty temp Notepad file; typed 46 characters; exact UI Automation read-back; disposable tab closed and temp file deleted.
+- **Local vision accuracy — LIVE_VERIFIED:** Notepad “Edit” menu located with confidence 0.98 and 7 px center error versus UI Automation; 4.34 s inference.
+- **Observe→act→verify — LIVE_VERIFIED:** `desktop_vision_click` clicked the Edit menu once at screen `(1254, 210)`; re-observation confirmed the menu opened; 4.7 s action; cleanup completed.
+- **Browser vision / extension workflow — BLOCKED_BY_MANUAL_ACTION:** Playwriter relay reports 0 connected extensions; no audit/report extension is installed.
+- Coordinate fix: Qwen 3.5 9B returns normalized 0–1000 coordinates, not pixels. Treating them as pixels caused offset/out-of-bounds clicks; the analyzer now converts normalized rectangles to image pixels and drops out-of-grid rectangles.
+
+Incident: the first Notepad attempt typed into a pre-existing user tab because Windows 11 Notepad is single-instance. The original 646-character buffer was restored exactly from evidence, the test text was removed, the clipboard was cleared, and the buffer was never saved; the disk file was untouched. Later tests use dedicated empty temp files and guard emptiness before typing.
+
+## 2026-11-10 — Phase 5 browser reliability fix and live acceptance
+
+Diagnosed and fixed two independent browser defects exposed after the Playwriter extension was activated:
+
+- **False extension count:** JARVIS probed `/extensions` (404) and swallowed the failure, always reporting `Connected Chrome Extensions: 0`. The relay actually serves `/extensions/status` with a wrapped `{ "extensions": [...] }` payload. `RelayManager` now parses that endpoint (with a legacy `/extension/status` fallback), distinguishes an unreadable inventory (`unknown`) from a genuine zero, and reports whether the relay port is listening.
+- **Infinite tab hang:** `BrowserManager.connect()` made `context.pages()[0]` active. That target was the real ChatGPT tab with an empty URL whose `title()` never resolved, so `listTabs()` hung indefinitely and navigation was intermittent. Title reads are now bounded (2 s), empty-URL targets are marked unresponsive, and JARVIS selects the first responsive tab or opens its own tab. Requested profiles that are missing now fail with a structured error instead of silently using another profile.
+- Added structured `BrowserError` codes, readiness reporting, and one stale-session reconnect + idempotent navigation retry. Added `browser readiness` and richer `browser status`/`browser tabs` output. Did not restart Chrome or the relay.
+
+### Host verification
+
+```text
+npm run typecheck       PASSED
+npm run lint            PASSED
+npm run format:check    PASSED
+npm test                35 test files passed, 245 tests passed (2.91 s)
+npm run build           PASSED
+```
+
+### Browser live acceptance
+
+- `browser status`: RUNNING, listening YES, version 0.9.0, extensions 1 (`vs.shrey@gmail.com`, active tabs 2).
+- `browser readiness`: READY in 870 ms, 1 attempt, enabled tabs 2, responsive tabs 1.
+- `browser tabs`: completed in 2.6 s; empty-URL target shown as `[UNRESPONSIVE]`, example.com shown normally.
+- Navigation: `https://example.com/` → `Example Domain`, recovered false; connect 893 ms.
+- New JARVIS-owned tab `https://example.org/` opened in 2.8 s and closed cleanly; 2 user tabs remained.
+- Readiness recheck: READY in 187 ms.
+
+Stale-session recovery was verified by unit tests, not induced live, to avoid disrupting the user's Chrome/relay session. The extension remains on Playwriter `0.8.0` while the relay is `0.9.0`; this is reported as diagnostics only and does not block JARVIS.
+
 ## Next entry
 
-Phase 4 is live-verified and documented. Do not start Phase 5 without explicit user instruction.
+Phase 5 baseline is live-verified for desktop Tests 1–3 and browser Test 4. Create the Phase 5 milestone commit. Browser Test 5 (extension report workflow) remains blocked until a suitable extension is supplied; do not install one solely to pass a test.

@@ -19,7 +19,7 @@ describe('BrowserManager', () => {
   });
 
   it('fails gracefully when relay is offline during connect()', async () => {
-    const manager = new BrowserManager({ relayPort: 59993 });
+    const manager = new BrowserManager({ relayPort: 59993, relayReadyTimeoutMs: 100 });
 
     await expect(manager.connect()).rejects.toThrow(/Playwriter relay is not reachable/);
   });

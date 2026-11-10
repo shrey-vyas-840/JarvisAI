@@ -1,5 +1,125 @@
 # Test Report
 
+## Phase 5 browser reliability — 2026-11-10
+
+Status: **host gate green; browser live Test 4 LIVE_VERIFIED; Test 5 still blocked by missing target extension**
+
+### Root causes fixed
+
+- `/extensions` was the wrong relay endpoint (404); the correct payload is `/extensions/status` wrapped in `{ "extensions": [...] }`. Failure was swallowed, producing a false `Connected Chrome Extensions: 0`.
+- `context.pages()[0]` was an attached ChatGPT target with an empty URL whose `title()` never resolves. Unbounded title reads hung `browser tabs` (>120 s observed) and made navigation intermittent.
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+npx tsx src/cli.ts browser status
+npx tsx src/cli.ts browser readiness
+npx tsx src/cli.ts browser tabs
+npx tsx <browser connect/navigate/new-tab/close-tab acceptance script>
+```
+
+Live acceptance scripts and console evidence stayed under `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\`; no screenshots or private artifacts were committed.
+
+### Automated results (real Windows host)
+
+- `npm run typecheck` (`tsc --noEmit`): passed.
+- `npm run lint` (`eslint .`): passed.
+- `npm run format:check` (`prettier --check .`): passed.
+- `npm test` (`vitest run`): Vitest `v5.1.0`; **35 test files, 245 tests passed**; duration 2.91 s.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+
+### Live browser results
+
+- `browser status`: relay RUNNING, port listening YES, version 0.9.0, **1 connected extension** (`vs.shrey@gmail.com`, stable key `install:Chrome:1iuprv21hdwovw`, active tabs 2).
+- `browser readiness`: **READY** in 870 ms, 1 attempt, enabled tabs 2, responsive tabs 1, session ready YES.
+- `browser tabs`: completed in **2.6 s**; empty-URL target labelled `[UNRESPONSIVE]`; example.com tab normal.
+- Connect: 893 ms, session id 8.
+- Navigate active tab to `https://example.com/`: `Example Domain`, `recovered: false`.
+- New JARVIS-owned tab `https://example.org/`: responsive, opened in 2.8 s; closed successfully; 2 user tabs remained.
+- Readiness recheck: READY in 187 ms.
+
+### Safety and limitations
+
+- Chrome and the relay were not restarted; only example.com/example.org navigation and a temporary JARVIS-owned tab were used.
+- Stale-session recovery was proven by unit tests (closed-target error → one reconnect → successful navigation), not induced live.
+- The Playwriter extension reports `0.8.0` against relay `0.9.0`; treated as diagnostic metadata, not a blocker.
+
+## Phase 5 — 2026-11-09 (historical; superseded by 2026-11-10 for browser Tests 4–5)
+
+Status: **implementation and host gate complete; desktop live Tests 1–3 LIVE_VERIFIED; browser Tests 4–5 BLOCKED_BY_MANUAL_ACTION**
+
+### Commands executed
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+npx tsx <desktop safe typing / vision / vision-click acceptance scripts>
+```
+
+Acceptance scripts were run from `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\jarvis-phase5\`; no screenshots or evidence were committed to the repository.
+
+### Automated results (real Windows host)
+
+- `npm run typecheck` (`tsc --noEmit`): passed with no diagnostics.
+- `npm run lint` (`eslint .`): passed with no diagnostics.
+- `npm run format:check` (`prettier --check .`): passed; all matched files use Prettier style.
+- `npm test` (`vitest run`):
+  - Vitest `v5.1.0`.
+  - 34 test files passed.
+  - 230 tests passed.
+  - Duration: 2.56 s.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+
+### Live results
+
+#### 1. Windows desktop typing/read-back — LIVE_VERIFIED
+
+- Opened a dedicated empty temp file in Notepad; verified the document was empty before typing.
+- Typed `JARVIS Phase 5 safe notepad test 1794208064352` (46 characters).
+- UI Automation read-back matched the typed text exactly (`readBackExact: true`).
+- Saved only to the disposable temp file, closed the tab, and deleted the temp file.
+- Evidence: `notepad-safe-window.png` and `notepad-safe.mts` console JSON.
+
+#### 2. Local Ollama vision accuracy — LIVE_VERIFIED
+
+- Captured the dedicated Notepad window (`773×758`).
+- Model `qwen3.5:9b` returned `Edit menu item` with confidence `0.98`.
+- Normalized output converted to image `(77, 64, 47, 31)`; UI Automation ground-truth center was `(102, 72)`.
+- Center error: **7 px**; inference latency: **4.34 s**; invalid elements: 0.
+- Evidence: `notepad-safe.mts` console JSON.
+
+#### 3. Observe → act → verify with `desktop_vision_click` — LIVE_VERIFIED
+
+- Observed menu bar: `File`, `Edit`, `View`, `System`.
+- Tool captured fresh, located the Edit menu (confidence `0.98`), clicked screen `(1254, 210)` once, and re-captured.
+- Re-observation via UI Automation showed the Edit menu opened: `Undo`, `Cut`, `Copy`, `Paste`, `Delete`, `Find`, `Replace`, `Go to`, `Select all`, `Time/Date`.
+- Action latency: 4.7 s; `verified: true`; no automatic retry.
+- Cleanup: Escape closed the menu; the disposable tab was closed and the temp file deleted.
+- Evidence: `observe-act-verify.mts` console JSON.
+
+#### 4–5. Browser vision and extension report workflow — BLOCKED_BY_MANUAL_ACTION
+
+- Playwriter relay is running at `127.0.0.1:19988` but reports `Connected Chrome Extensions: 0`.
+- Live browser tests require manual activation of the Playwriter extension on a Chrome tab in Profile 4 (`vs.shrey@gmail.com`).
+- No suitable business-audit/PDF-report extension is installed in the inspected profiles, so the extension report workflow cannot be exercised. No extension was installed to force a pass.
+
+### Incident and corrective action
+
+The first Notepad attempt typed into a pre-existing user tab because Windows 11 Notepad is single-instance. The original 646-character buffer was restored exactly from captured evidence, the test text was removed, the clipboard was cleared, and the buffer was never saved; the on-disk file was untouched. The affected tab lost its filename association and now appears untitled with the original text. All later tests use dedicated empty temp files with an emptiness guard.
+
+### Notes
+
+- Qwen 3.5 9B returns normalized 0–1000 coordinates. The analyzer now validates them on that grid, converts to image pixels, and drops out-of-grid rectangles; this fixed offset/out-of-bounds clicks.
+- The sidecar `mouse_click` double-click branch was repaired because `pywinauto 0.6.9` rejects a `double` keyword.
+
 ## Phase 4 — 2026-11-08
 
 Status: **implementation, automated verification, and 5/5 live host acceptance tests complete**

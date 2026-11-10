@@ -21,6 +21,37 @@ export interface DesktopWindowInfo {
   };
 }
 
+export interface DesktopScreenInfo {
+  readonly primary: {
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly virtual: {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly dpi: number;
+  readonly dpi_scale: number;
+}
+
+export interface DesktopScreenshotResult {
+  readonly captured: boolean;
+  readonly width: number;
+  readonly height: number;
+  readonly image_width: number;
+  readonly image_height: number;
+  readonly original_width: number;
+  readonly original_height: number;
+  readonly screen_origin_x: number;
+  readonly screen_origin_y: number;
+  readonly scale_x: number;
+  readonly scale_y: number;
+  readonly saved_path: string | null;
+  readonly image_base64?: string | undefined;
+}
+
 export interface DesktopControlInfo {
   readonly control_type: string;
   readonly title: string;
@@ -75,19 +106,17 @@ export class DesktopManager {
   public async executeAction<T = unknown>(
     action: string,
     params: Record<string, unknown> = {},
+    options: { timeoutMs?: number | undefined } = {},
   ): Promise<T> {
     this.ensureSidecarRunning();
     const reqId = `req-${String(++this.reqCounter)}-${String(Date.now())}`;
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(reqId);
-        reject(
-          new Error(
-            `Desktop action "${action}" timed out after ${String(this.defaultTimeoutMs)}ms.`,
-          ),
-        );
-      }, this.defaultTimeoutMs);
+        reject(new Error(`Desktop action "${action}" timed out after ${String(timeoutMs)}ms.`));
+      }, timeoutMs);
 
       this.pendingRequests.set(reqId, {
         resolve: resolve as (val: unknown) => void,
@@ -106,8 +135,24 @@ export class DesktopManager {
     });
   }
 
+  public async getScreenInfo(): Promise<DesktopScreenInfo> {
+    return this.executeAction<DesktopScreenInfo>('get_screen_info');
+  }
+
   public async listWindows(): Promise<DesktopWindowInfo[]> {
     return this.executeAction<DesktopWindowInfo[]>('list_windows');
+  }
+
+  public async waitForWindow(params: {
+    title?: string | undefined;
+    class_name?: string | undefined;
+    timeout_ms?: number | undefined;
+    poll_ms?: number | undefined;
+  }): Promise<{ found: boolean; window: DesktopWindowInfo }> {
+    const requestedTimeout = params.timeout_ms ?? 10_000;
+    return this.executeAction('wait_for_window', params, {
+      timeoutMs: Math.max(this.defaultTimeoutMs, requestedTimeout + 5_000),
+    });
   }
 
   public async inspectWindow(params: {
@@ -147,6 +192,7 @@ export class DesktopManager {
     handle?: number | undefined;
     title?: string | undefined;
     automation_id?: string | undefined;
+    control_title?: string | undefined;
   }): Promise<{ typed: boolean; length: number }> {
     return this.executeAction('type_text', params);
   }
@@ -158,7 +204,11 @@ export class DesktopManager {
   public async scroll(params: {
     direction: 'down' | 'up';
     amount?: number | undefined;
-  }): Promise<{ scrolled: boolean }> {
+    x?: number | undefined;
+    y?: number | undefined;
+    handle?: number | undefined;
+    title?: string | undefined;
+  }): Promise<{ scrolled: boolean; direction: string; amount: number }> {
     return this.executeAction('scroll', params);
   }
 
@@ -167,7 +217,9 @@ export class DesktopManager {
     y: number;
     button?: 'left' | 'right' | undefined;
     double?: boolean | undefined;
-  }): Promise<{ clicked: boolean; x: number; y: number }> {
+    handle?: number | undefined;
+    title?: string | undefined;
+  }): Promise<{ clicked: boolean; x: number; y: number; target_window?: string }> {
     return this.executeAction('mouse_click', params);
   }
 
@@ -183,15 +235,26 @@ export class DesktopManager {
     y1: number;
     x2: number;
     y2: number;
-  }): Promise<{ dragged: boolean }> {
+    handle?: number | undefined;
+    title?: string | undefined;
+  }): Promise<{ dragged: boolean; from: [number, number]; to: [number, number] }> {
     return this.executeAction('mouse_drag', params);
   }
 
   public async captureScreenshot(params: {
-    path: string;
+    path?: string | undefined;
     handle?: number | undefined;
-  }): Promise<{ captured: boolean; width: number; height: number; saved_path: string }> {
-    return this.executeAction('capture_screenshot', params);
+    title?: string | undefined;
+    includeImage?: boolean | undefined;
+    maxDimension?: number | undefined;
+  }): Promise<DesktopScreenshotResult> {
+    return this.executeAction('capture_screenshot', {
+      path: params.path,
+      handle: params.handle,
+      title: params.title,
+      include_image: params.includeImage,
+      max_dimension: params.maxDimension,
+    });
   }
 
   public async launchApplication(params: {

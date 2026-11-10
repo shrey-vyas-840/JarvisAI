@@ -1,11 +1,14 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import type { Page } from 'playwriter';
 import { z } from 'zod';
 
 import {
   BrowserManager,
+  discoverChromeExtensions,
   discoverChromeProfiles,
   launchChromeProfile,
+  readPngDimensions,
 } from '../../browser/index.js';
 import {
   extractPageSnapshot,
@@ -16,17 +19,87 @@ import { validateBrowserUrl } from '../../browser/url-guard.js';
 import type { AppConfig } from '../../config.js';
 import type { ToolDefinition } from '../../core/tool-registry.js';
 import type { ApprovalRequest } from '../../security/approval-types.js';
+import { mapImageRectToViewport, toScreenElement, VisionAnalyzer } from '../../vision/index.js';
 
 export interface BrowserToolsOptions {
   readonly browserManager?: BrowserManager;
+  readonly visionAnalyzer?: VisionAnalyzer;
   readonly config: AppConfig;
 }
 
 export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition[] {
   const browser = options.browserManager ?? new BrowserManager();
+  const vision =
+    options.visionAnalyzer ??
+    new VisionAnalyzer({
+      baseUrl: options.config.ollama.baseUrl,
+      model: options.config.ollama.visionModel,
+    });
   const config = options.config;
 
   const tools: ToolDefinition[] = [];
+
+  const captureForVision = async (
+    page: Page,
+  ): Promise<{
+    imageBase64: string;
+    imageWidth: number;
+    imageHeight: number;
+    viewportWidth: number;
+    viewportHeight: number;
+  }> => {
+    const viewportSize = page.viewportSize();
+    const viewport =
+      viewportSize ??
+      (await page
+        .evaluate(() => {
+          const view = globalThis as unknown as {
+            innerWidth: number;
+            innerHeight: number;
+          };
+          return { width: view.innerWidth, height: view.innerHeight };
+        })
+        .catch(() => null));
+
+    if (
+      viewport === null ||
+      !Number.isInteger(viewport.width) ||
+      !Number.isInteger(viewport.height) ||
+      viewport.width < 1 ||
+      viewport.height < 1
+    ) {
+      throw new Error(
+        'The connected browser page does not expose usable viewport dimensions, so visual coordinates cannot be mapped safely.',
+      );
+    }
+
+    const screenshot = await page.screenshot({ type: 'png' });
+    const dimensions = readPngDimensions(screenshot);
+
+    return {
+      imageBase64: screenshot.toString('base64'),
+      imageWidth: dimensions.width,
+      imageHeight: dimensions.height,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+    };
+  };
+
+  const safePageTitle = async (page: Page): Promise<string | null> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('Timed out reading page title.'));
+        }, 2000);
+      });
+      return await Promise.race([page.title(), timeout]);
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 
   // 1. browser_list_profiles
   tools.push({
@@ -58,7 +131,47 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     },
   });
 
-  // 2. browser_open_profile
+  // 2. browser_list_extensions
+  const listExtensionsSchema = z.object({
+    profileDirectory: z
+      .string()
+      .optional()
+      .describe('Optional Chrome profile directory filter, e.g. "Profile 4".'),
+  });
+  tools.push({
+    name: 'browser_list_extensions',
+    description:
+      'List installed Chrome extension metadata (name, ID, version, profile association) without reading extension storage, credentials, or browsing data.',
+    permission: 'read-only',
+    timeoutMs: 10000,
+    parameters: {
+      type: 'object',
+      properties: {
+        profileDirectory: {
+          type: 'string',
+          description: 'Optional Chrome profile directory filter.',
+        },
+      },
+      required: [],
+    },
+    argumentsSchema: listExtensionsSchema,
+    execute: (rawArgs: unknown) => {
+      const args = listExtensionsSchema.parse(rawArgs);
+      const discovery = discoverChromeExtensions();
+      const extensions = discovery.extensions.filter(
+        (extension) =>
+          args.profileDirectory === undefined ||
+          extension.profileDirectory === args.profileDirectory,
+      );
+
+      return {
+        userDataDir: discovery.userDataDir,
+        extensions,
+      };
+    },
+  });
+
+  // 3. browser_open_profile
   const openProfileSchema = z.object({
     profileDirectory: z
       .string()
@@ -140,7 +253,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
   tools.push({
     name: 'browser_connect_profile',
     description:
-      'Connect JARVIS to the selected Chrome profile via the Playwriter extension. If multiple profiles are connected, you may specify profileIdOrEmail.',
+      'Connect JARVIS to the selected Chrome profile via the Playwriter extension and report session readiness. If multiple profiles are connected, you may specify profileIdOrEmail.',
     permission: 'read-only',
     timeoutMs: 20000,
     parameters: {
@@ -159,7 +272,9 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
       const profile = await browser.connect(args.profileIdOrEmail);
       return {
         connected: true,
+        sessionId: browser.getSessionId(),
         profile,
+        readiness: await browser.getReadiness(),
       };
     },
   });
@@ -332,7 +447,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     execute: async () => {
       const page = browser.getActivePage();
       await page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
-      return { url: page.url(), title: await page.title() };
+      return { url: page.url(), title: await safePageTitle(page) };
     },
   });
 
@@ -347,7 +462,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     execute: async () => {
       const page = browser.getActivePage();
       await page.goForward({ waitUntil: 'domcontentloaded', timeout: 15000 });
-      return { url: page.url(), title: await page.title() };
+      return { url: page.url(), title: await safePageTitle(page) };
     },
   });
 
@@ -362,7 +477,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     execute: async () => {
       const page = browser.getActivePage();
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-      return { url: page.url(), title: await page.title() };
+      return { url: page.url(), title: await safePageTitle(page) };
     },
   });
 
@@ -425,7 +540,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     argumentsSchema: z.object({}),
     execute: async () => {
       const page = browser.getActivePage();
-      return { title: await page.title() };
+      return { title: await safePageTitle(page) };
     },
   });
 
@@ -507,7 +622,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
         clicked: true,
         selector: args.selector,
         currentUrl: page.url(),
-        currentTitle: await page.title(),
+        currentTitle: await safePageTitle(page),
       };
     },
   });
@@ -745,7 +860,206 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     },
   });
 
-  // 25. browser_fill_form
+  // 25. browser_vision_locate
+  const visionLocateSchema = z.object({
+    target: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe('Plain-language description of the visible page element to locate.'),
+    max_elements: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe('Maximum matching elements to return (default: 8).'),
+    min_confidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe('Optional minimum model confidence filter (0 to 1).'),
+  });
+  tools.push({
+    name: 'browser_vision_locate',
+    description:
+      'Locate visible webpage elements using the local Ollama vision model when the DOM/accessibility tree cannot identify a canvas, image, or custom control. Returns viewport CSS coordinates. No screenshot is saved or sent to the cloud.',
+    permission: 'read-only',
+    timeoutMs: 120000,
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Element description to locate.' },
+        max_elements: { type: 'integer', description: 'Maximum elements to return.' },
+        min_confidence: { type: 'number', description: 'Minimum confidence from 0 to 1.' },
+      },
+      required: ['target'],
+    },
+    argumentsSchema: visionLocateSchema,
+    execute: async (rawArgs: unknown, context) => {
+      const args = visionLocateSchema.parse(rawArgs);
+      const page = browser.getActivePage();
+      const capture = await captureForVision(page);
+      const analysis = await vision.analyze(
+        {
+          imageBase64: capture.imageBase64,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          target: args.target,
+          contextLabel: 'browser page',
+        },
+        { signal: context.signal },
+      );
+
+      const elements = analysis.elements
+        .filter(
+          (element) =>
+            args.min_confidence === undefined || (element.confidence ?? 0) >= args.min_confidence,
+        )
+        .slice(0, args.max_elements ?? 8)
+        .map((element) => {
+          const viewportRect = mapImageRectToViewport(
+            {
+              x: element.x,
+              y: element.y,
+              width: element.width,
+              height: element.height,
+            },
+            {
+              imageWidth: capture.imageWidth,
+              imageHeight: capture.imageHeight,
+              viewportWidth: capture.viewportWidth,
+              viewportHeight: capture.viewportHeight,
+            },
+          );
+
+          return {
+            ...toScreenElement(element, viewportRect),
+            imageRect: {
+              x: element.x,
+              y: element.y,
+              width: element.width,
+              height: element.height,
+            },
+          };
+        });
+
+      return {
+        observed: true,
+        model: analysis.model,
+        summary: analysis.summary,
+        elapsedMs: analysis.elapsedMs,
+        invalidElementCount: analysis.invalidElementCount,
+        url: page.url(),
+        viewport: {
+          width: capture.viewportWidth,
+          height: capture.viewportHeight,
+        },
+        elements,
+      };
+    },
+  });
+
+  // 26. browser_vision_click
+  const visionClickSchema = z.object({
+    target: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe('Plain-language description of the visible page element to click.'),
+    candidate_index: z
+      .number()
+      .int()
+      .min(0)
+      .max(19)
+      .optional()
+      .describe('Which returned candidate to click, ordered by model output (default: 0).'),
+    min_confidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe('Minimum confidence required before clicking (default: 0.5).'),
+    button: z.enum(['left', 'right']).optional().describe('Mouse button (default: left).'),
+  });
+  tools.push({
+    name: 'browser_vision_click',
+    description:
+      'Last-resort visual click for webpage elements that DOM selectors cannot target. Locates the element with local vision and clicks its viewport center. Use browser_click first whenever a selector or accessible locator is available.',
+    permission: 'read-only',
+    timeoutMs: 120000,
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Element description to click.' },
+        candidate_index: { type: 'integer', description: 'Candidate index to click.' },
+        min_confidence: { type: 'number', description: 'Minimum confidence from 0 to 1.' },
+        button: { type: 'string', enum: ['left', 'right'] },
+      },
+      required: ['target'],
+    },
+    argumentsSchema: visionClickSchema,
+    execute: async (rawArgs: unknown, context) => {
+      const args = visionClickSchema.parse(rawArgs);
+      const page = browser.getActivePage();
+      const capture = await captureForVision(page);
+      const analysis = await vision.analyze(
+        {
+          imageBase64: capture.imageBase64,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          target: args.target,
+          contextLabel: 'browser page',
+        },
+        { signal: context.signal },
+      );
+      const minConfidence = args.min_confidence ?? 0.5;
+      const candidates = analysis.elements.filter(
+        (element) => (element.confidence ?? 0) >= minConfidence,
+      );
+      const candidate = candidates[args.candidate_index ?? 0];
+
+      if (candidate === undefined) {
+        throw new Error(
+          `No visual element matched "${args.target}" with confidence >= ${String(minConfidence)}. No click was performed.`,
+        );
+      }
+
+      const viewportRect = mapImageRectToViewport(
+        {
+          x: candidate.x,
+          y: candidate.y,
+          width: candidate.width,
+          height: candidate.height,
+        },
+        {
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          viewportWidth: capture.viewportWidth,
+          viewportHeight: capture.viewportHeight,
+        },
+      );
+      const centerX = viewportRect.x + Math.floor(viewportRect.width / 2);
+      const centerY = viewportRect.y + Math.floor(viewportRect.height / 2);
+
+      await page.mouse.click(centerX, centerY, { button: args.button ?? 'left' });
+      await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => undefined);
+
+      return {
+        clicked: true,
+        target: args.target,
+        candidateIndex: args.candidate_index ?? 0,
+        candidateCount: candidates.length,
+        confidence: candidate.confidence ?? null,
+        viewportCoordinates: { x: centerX, y: centerY },
+        currentUrl: page.url(),
+        currentTitle: await safePageTitle(page),
+      };
+    },
+  });
+
+  // 27. browser_fill_form
   const fillFormSchema = z.object({
     formSelector: z.string().optional().describe('Optional CSS selector for the form.'),
     fieldValues: z
@@ -878,7 +1192,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
       return {
         submitted: true,
         resultingUrl: page.url(),
-        resultingTitle: await page.title(),
+        resultingTitle: await safePageTitle(page),
       };
     },
   });
