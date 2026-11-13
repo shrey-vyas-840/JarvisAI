@@ -17,7 +17,7 @@ The historical entries below describe earlier states and failed attempts. Fresh 
 - `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test` (41 files / 297 tests), and `npm run build` all pass. Targeted CLI ESLint also passes with zero diagnostics.
 - Runtime: Ollama/Qwen is available; external Playwriter relay and extension are browser-ready. Agent Desktop cannot access a state file owned by another Windows principal and selector probing reports `EnumWindows` failure. pywinauto cannot start because global Python is absent and the project venv points to a missing Python 3.12 installation.
 - Backend selection currently returns no desktop backend. Therefore the GitHub/Maps/Gemini workflow was not attempted. See `docs/PHASE-6-READINESS.md` for evidence and limitations.
-- Starting commit was `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; changes are currently uncommitted. Update this checkpoint after intentional commit.
+- Starting commit was `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`. Recovery implementation committed locally as `a353241`; documentation checkpoint recorded in the follow-up commit. No push was performed.
 
 ## Project Context
 

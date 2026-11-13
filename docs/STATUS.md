@@ -9,7 +9,7 @@
 - Live browser readiness passed against the existing external Playwriter 0.9.0 relay at `127.0.0.1:19988`, with one connected extension and one responsive tab. No Chrome or relay process was restarted or stopped.
 - Current desktop readiness is BLOCKED. Agent Desktop state access failed because the state file is owned by another Windows principal; selector probing also failed at `EnumWindows`. pywinauto is unavailable because global Python is absent and the project venv references a missing Python 3.12 installation. The backend selector selected no desktop backend.
 - Because the desktop backend gate is not satisfied, the GitHub README, Google Maps, and Gemini image acceptance workflow was not started. See [PHASE-6-READINESS.md](PHASE-6-READINESS.md) for capability evidence and remaining work.
-- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; current work is not yet committed. See the recovery checkpoint in `PHASE-6-HANDOFF.md` for current Git status and next commands.
+- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; recovery implementation committed locally as `a353241`. The documentation checkpoint follows in a separate local commit. No push was performed.
 
 Last updated: 2026-11-13
 

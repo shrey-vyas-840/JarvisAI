@@ -2,12 +2,12 @@
 
 ## 2026-11-14 recovery checkpoint
 
-- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; branch `main`. At baseline it was four commits ahead of the locally recorded `origin/main` tracking reference (`4 0`). No fetch or push was performed. The pre-existing unstaged BackendRouter modification was inspected and preserved; it is included with this recovery’s intentional BackendRouter corrections.
+- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; recovery implementation commit: `a353241` (`fix: recover phase 6 quality and orchestration`). Branch `main`. At baseline it was four commits ahead of the locally recorded `origin/main` tracking reference (`4 0`). No fetch or push was performed. The pre-existing unstaged BackendRouter modification was inspected and preserved; it is included with this recovery’s intentional BackendRouter corrections.
 - Quality gate: `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test` (41 files / 297 tests), `npm run build`, and `npx eslint src/cli.ts --no-cache` all pass.
 - Orchestrator stale snapshot recovery uses a fresh snapshot and unique target lookup only after a failed action receipt explicitly says `delivery=not_delivered` and `retry=safe`. Uncertain action delivery is not retried. Exhausted steps are FAILED, dependent steps SKIPPED, and plan state reaches FAILED or PARTIALLY_COMPLETED.
 - Live: Ollama/Qwen is available; external Playwriter 0.9.0 relay, extension, and responsive tab pass browser readiness. Agent Desktop is blocked by foreign-principal state ownership and a selector `EnumWindows` failure. pywinauto is blocked by missing Python and a venv referring to a removed Python 3.12 installation. No browser/relay process was restarted or stopped.
 - The full workflow is gated: no desktop backend is live-ready, so no GitHub README update, Google Maps navigation, Gemini prompt, download, or image opening was attempted. Capability-by-capability evidence is in `PHASE-6-READINESS.md`.
-- Current changes remain uncommitted. Next: inspect `git diff` and `git status --short`, stage only the recovery source/test/docs files, inspect the staged diff, commit intentionally, then record the resulting SHA and status here. Do not push without a separate request.
+- Recovery changes are committed as `a353241`; the documentation checkpoint itself is being recorded in the follow-up commit. The expected final working tree is clean. Do not push without a separate request.
 
 **Date**: 2026-11-13
 **Commit**: (pending)
