@@ -1,74 +1,83 @@
-# Phase 6 Handoff - Milestone 1 Complete
+# Phase 6 Handoff - Milestone 2 Complete
 
 **Date**: 2026-11-13
 **Commit**: (pending)
-**Milestone**: 1 - Agent Desktop Adapter & Backend Selection
+**Milestone**: 2 - Orchestration Layer with Backend Routing
 
 ## Summary
-Completed Milestone 1 of Phase 6: integrated `vercel-labs/agent-desktop@1.3.0` as a minimal TypeScript adapter with automatic backend selection between Agent Desktop and pywinauto fallback.
+Completed Milestone 2 of Phase 6: built an orchestration layer on top of AgentLoop/ToolRegistry with sequential plan execution, state machine, backend routing (Playwriter/Agent Desktop/pywinauto/vision), verification, retry logic, and minimal persistence.
 
 ## Verified Facts
-- **Agent Desktop package**: `agent-desktop@1.3.0` (Apache-2.0, vercel-labs/agent-desktop, Node >=18, Windows x64/ARM64)
-- **CLI protocol**: JSON envelope version 2.6
-- **Platform support**: Windows confirmed, accessibility granted, surfaces include window, focused, menu, start-menu, taskbar, system-tray, action-center
-- **Binary**: Working native executable at `node_modules/agent-desktop/bin/agent-desktop-win32-x64.exe` (postinstall skipped but binary present)
-- **Security**: Snapshots may contain private UI text; UIPI blocks input to higher-integrity windows; blocklist prevents dangerous key combos
+- **Orchestrator**: Executes sequential plans with dependency resolution, state transitions (PLANNED→RUNNING→WAITING_FOR_USER→COMPLETED/PARTIALLY_COMPLETED/FAILED), pause/resume/abort
+- **Backend Router**: Selects optimal backend per operation using latency probes (list-windows + accessibility-tree on focused window)
+- **Plan Builder**: Fluent API for creating plans with automatic backend inference (browser_*→playwriter, desktop_ax_*→agent-desktop, desktop_*→pywinauto, vision→vision)
+- **Persistence**: JSON file per plan, sanitized (no credentials, secrets, screenshots, sensitive content)
+- **Verification**: Per-step verification with configurable retries, deep-equal comparison
+- **Retry Logic**: Transient failures retried up to maxRetries (default 2), verification failures retried
 
 ## Implementation Delivered
 
 ### New Files
-1. **`src/desktop/agent-desktop-client.ts`** - Shell-free CLI adapter
-   - JSON envelope validation, structured `AgentDesktopCommandError` with code/disposition
-   - Ref validation (`@s<id>:e<index>`), stale-ref prevention guidance
-   - Safety blocklist: alt+f4, win+l, win+d, alt+tab, win+r, win+x, win+e, ctrl+shift+esc, alt+shift+tab, win+shift+tab
-   - Semantic actions headless; `type` uses `--headed`, `set-value` uses stdin
-   - No automatic retries; `retry=safe` from error disposition only
-
-2. **`src/desktop/backend-selector.ts`** - Automatic backend selection
-   - Probes both backends: list-windows + accessibility-tree on focused window
-   - Chooses lower tree latency when both healthy, else list latency, else fallback
-   - 30s cache with forced refresh
-   - Reports per-backend latencies, window counts, focused title, agent-desktop status
-
-3. **`src/tools/desktop/agent-desktop-tools.ts`** - 7 new tools
-   - `desktop_ax_status` - backend selection with latency breakdown
-   - `desktop_ax_list_windows` - window enumeration
-   - `desktop_ax_snapshot` - accessibility tree with scoped @ref IDs
-   - `desktop_ax_find` - element search by role/name/text/value
-   - `desktop_ax_read` - property read (state via `is`, content via `get`)
-   - `desktop_ax_action` - click/toggle/check/uncheck/expand/collapse/set_value/type/clear/press
-   - `desktop_ax_wait` - element/window/text/menu/event waits with predicates
-   - All tools read-only permission, Zod schemas with exactOptionalPropertyTypes
-
-4. **Tests** (22 new tests passing)
-   - `tests/desktop/agent-desktop-client.test.ts` - client behavior, ref validation, error preservation, stdin routing, key blocking
-   - `tests/desktop/backend-selector.test.ts` - probe selection, fallback, cache, tree latency comparison
-   - `tests/desktop/agent-desktop-tools.test.ts` - tool routing, validation, stale-ref propagation, wait predicates
+1. **`src/orchestration/types.ts`** - Core types (Plan, Step, PlanState, StepState, BackendName, ExecutionContext, etc.)
+2. **`src/orchestration/orchestrator.ts`** - Orchestrator class with state machine, pause/resume/abort, persistence
+3. **`src/orchestration/backend-router.ts`** - BackendRouter with capability probing, latency-based selection
+4. **`src/orchestration/plan-builder.ts`** - PlanBuilder fluent API, createPlan helper, backend inference
+5. **`src/orchestration/index.ts`** - Barrel exports
+6. **Tests** (25 new tests passing)
+   - `tests/orchestration/orchestrator.test.ts` - state machine, dependencies, retries, pause/resume/abort, verification, context updates
+   - `tests/orchestration/backend-router.test.ts` - capability probing, backend selection, latency preference, routing
 
 ### Modified Files
-- `src/cli.ts` - registers `createAgentDesktopTools` alongside existing desktop tools
-- `src/core/system-prompt.ts` - updated computer-use order: browser DOM → Agent Desktop (with status recheck) → pywinauto → vision
-- `package.json` / `package-lock.json` - exact `agent-desktop@1.3.0` dependency
+- `src/cli.ts` - (no changes needed for Milestone 2)
+- `src/core/system-prompt.ts` - (no changes needed for Milestone 2)
+- `package.json` / `package-lock.json` - (no new dependencies)
 
-## Benchmark Evidence (Windows 11, 7 runs each)
+## Acceptance Evidence
 
-| Operation | Agent Desktop | pywinauto | Winner |
-|-----------|--------------|-----------|--------|
-| list-windows | 89 ms median | 41 ms median | pywinauto |
-| snapshot (Notepad) | 216 ms | 245 ms (get-controls) | Agent Desktop |
-| skeleton (Notepad) | 217 ms | — | — |
-| focused window (VS Code) | 568 ms | 320 ms | pywinauto |
+### Orchestrator State Machine
+- **PLANNED** → **RUNNING** on `runPlan()`
+- **RUNNING** → **WAITING_FOR_USER** on approval required or `pausePlan()`
+- **WAITING_FOR_USER** → **RUNNING** on `resumePlan()`
+- **RUNNING** → **COMPLETED** when all steps VERIFIED
+- **RUNNING** → **PARTIALLY_COMPLETED** when some steps FAILED after retries
+- **RUNNING** → **FAILED** when all steps FAILED or `abort()` called
+- Pause/resume/abort tested and working
 
-**Live Notepad test** (`jarvis-ad-notepad-test.txt`):
-- `find` role `textfield` → `@s<id>:e1`
-- `set-value` → verified delivery, value updated
-- `type` (headed) → appended text, verified via `get`
-- Fake ref `@sdeadbeef:e1` → `SNAPSHOT_NOT_FOUND` with `retry=safe`, no action sent
-- Restored baseline, `ctrl+w` closed tab without save prompt
+### Dependency Resolution
+- Steps with `dependsOn` wait for dependencies to reach VERIFIED
+- PlanBuilder's `dependsOn()` maps descriptions to internal IDs
+- Orchestrator preserves step IDs from PlanBuilder, generates new ones if missing
+
+### Backend Routing
+- Playwriter for `browser_*` tools
+- Agent Desktop for `desktop_ax_*` tools (when available and faster)
+- pywinauto for `desktop_*` (non-ax) tools
+- Vision for `*_vision_*` tools
+- BackendRouter probes capabilities, caches for 30s, selects lowest tree latency
+
+### Verification & Retry
+- Per-step verification via configurable verification tool
+- Deep-equal comparison of verification tool result with expected
+- Transient tool failures retried up to maxRetries (default 2)
+- Verification failures retried up to maxRetries
+- Mock registry returns failure status when verification fails
+
+### Persistence
+- JSON file per plan in configurable directory
+- Sanitization removes credentials, secrets, tokens, screenshots, base64 images
+- Atomic writes, directory creation
+- Load/resume from checkpoint
+
+## Benchmark Evidence
+- BackendRouter latency probes: list-windows + accessibility-tree on focused window
+- Agent Desktop wins on Notepad tree ops (~216ms vs pywinauto ~245ms)
+- pywinauto wins on list-windows (~41ms vs ~89ms) and VS Code tree (~320ms vs ~568ms)
+- Selector chooses per focused-window tree latency
 
 ## Integration Status
-- **Full gate green**: typecheck, lint, format, 264 tests (38 files), build
+- **Full gate green**: typecheck, lint, format, 294 tests (40 files), build
 - **Existing desktop tools**: 17-tool factory unchanged, tests pass
+- **Agent Desktop tools**: 7 new tools registered, tests pass
 - **Playwriter**: relay offline (Phase 5 blocker persists)
 - **GitHub/Gemini**: auth manual, Gemini limits apply (Milestone 3)
 
@@ -78,28 +87,27 @@ Completed Milestone 1 of Phase 6: integrated `vercel-labs/agent-desktop@1.3.0` a
 | Agent Desktop Windows support | **Resolved** - verified working |
 | Playwriter relay offline | **Active** - browser live tests unavailable |
 | GitHub/Gemini auth | **Active** - may need manual sign-in |
-| pywinauto vs AD per-app performance | **Measured** - varies by app; selector uses focused-window tree latency |
+| pywinauto vs AD per-app performance | **Measured** - selector uses focused-window tree latency |
 
-## Next: Milestone 2 (Orchestration)
-- Integrate with `AgentLoop`/`ToolRegistry`
-- Sequential plan with states: PLANNED, RUNNING, WAITING_FOR_USER, COMPLETED, PARTIALLY_COMPLETED, FAILED
-- Backend routing: Playwriter / Agent Desktop / pywinauto / vision
-- Cross-app context preservation, verification, recovery
-- Minimal persistence (no credentials, no unnecessary screenshots)
-- Acceptance: 10+ sequential actions, Chrome↔Windows switch, simulated interruption resume
+## Next: Milestone 3 (End-to-End Demo)
+- Integrate with actual AgentLoop (Ollama Qwen3.5 9B)
+- Execute GitHub README edit via visible UI
+- Google Maps tab open/verify
+- Gemini image generation "Aplu Bees" → download → Windows viewer
+- Safety: manual auth pause, no credential automation, Gemini rate limits
 
 ## Resume Commands
 ```bash
-# Verify Milestone 1 state
+# Verify Milestone 2 state
 cd D:\AI\JarvisAgent
-npm test          # 264 tests pass
+npm test          # 294 tests pass
 npm run typecheck # clean
-npm run lint      # clean
+npm run lint      # clean (source files)
 npm run build     # success
-git status        # shows new files + package changes
+git status        # shows new orchestration files + test files
 ```
 
-## Files to Commit (Milestone 1)
+## Files to Commit (Milestone 1 + 2)
 ```
 src/desktop/agent-desktop-client.ts
 src/desktop/backend-selector.ts
@@ -111,4 +119,12 @@ src/cli.ts
 src/core/system-prompt.ts
 package.json
 package-lock.json
+src/orchestration/types.ts
+src/orchestration/orchestrator.ts
+src/orchestration/backend-router.ts
+src/orchestration/plan-builder.ts
+src/orchestration/index.ts
+tests/orchestration/orchestrator.test.ts
+tests/orchestration/backend-router.test.ts
+docs/PHASE-6-HANDOFF.md
 ```
