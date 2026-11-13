@@ -10,21 +10,25 @@ export interface StepBuilder {
   backend: BackendName;
   dependsOn: string[];
   expectedOutcome: string;
-  verification: {
-    tool: string;
-    args: Record<string, unknown>;
-    expected: unknown;
-  } | undefined;
+  verification:
+    | {
+        tool: string;
+        args: Record<string, unknown>;
+        expected: unknown;
+      }
+    | undefined;
 }
 
 export class PlanBuilder {
   private readonly steps: StepBuilder[] = [];
   private stepIdMap = new Map<string, string>();
 
-  public constructor() {
-  }
-
-  public addStep(step: Omit<StepBuilder, 'id' | 'backend' | 'dependsOn'> & { backend?: BackendName; dependsOn?: string[] }): this {
+  public addStep(
+    step: Omit<StepBuilder, 'id' | 'backend' | 'dependsOn'> & {
+      backend?: BackendName;
+      dependsOn?: string[];
+    },
+  ): this {
     const id = randomUUID();
     this.stepIdMap.set(step.description, id);
     this.steps.push({
@@ -115,7 +119,11 @@ export class PlanBuilder {
     });
   }
 
-  public addDesktopWait(ref: string, predicate: string, description = `Wait for ${predicate} on ${ref}`): this {
+  public addDesktopWait(
+    ref: string,
+    predicate: string,
+    description = `Wait for ${predicate} on ${ref}`,
+  ): this {
     return this.addStep({
       description,
       tool: 'desktop_ax_wait',
@@ -137,7 +145,7 @@ export class PlanBuilder {
     });
   }
 
-  public addWait(ms: number, description = `Wait ${ms}ms`): this {
+  public addWait(ms: number, description = `Wait ${String(ms)}ms`): this {
     return this.addStep({
       description,
       tool: 'desktop_ax_wait',
@@ -190,8 +198,8 @@ export function createPlan(
         description: s.description,
         tool: s.tool,
         args: s.args,
-        backend: s.backend ?? getBackendForStep(s),
-        dependsOn: s.dependsOn ?? [],
+        backend: getBackendForStep(s),
+        dependsOn: s.dependsOn,
         expectedOutcome: s.expectedOutcome,
       };
       if (s.verification !== undefined) {

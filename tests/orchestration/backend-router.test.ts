@@ -14,19 +14,20 @@ const mockLogger: Logger = {
 
 function createMockRegistry(tools: string[]): ToolRegistry {
   return {
-    execute: async (): Promise<ToolExecutionReceipt> => ({
-      executionId: 'test',
-      callId: 'test',
-      toolName: 'test',
-      status: 'success',
-      approval: 'not_required',
-      verification: 'not_applicable',
-      result: {},
-      error: null,
-      durationMs: 0,
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-    }),
+    execute: (): Promise<ToolExecutionReceipt> =>
+      Promise.resolve({
+        executionId: 'test',
+        callId: 'test',
+        toolName: 'test',
+        status: 'success',
+        approval: 'not_required',
+        verification: 'not_applicable',
+        result: {},
+        error: null,
+        durationMs: 0,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      }),
     has: (name: string) => tools.includes(name),
     listNames: () => tools,
   };
@@ -111,7 +112,10 @@ describe('BackendRouter', () => {
   });
 
   it('selects desktop backend for desktop tools', async () => {
-    const selected = await router.selectBackend(['desktop_ax_snapshot', 'desktop_ax_action'], 'desktop');
+    const selected = await router.selectBackend(
+      ['desktop_ax_snapshot', 'desktop_ax_action'],
+      'desktop',
+    );
     expect(selected?.name).toBe('agent-desktop');
   });
 
@@ -124,23 +128,44 @@ describe('BackendRouter', () => {
     // Create a new router with mocked latencies
     const mockAgentDesktop = createMockAgentDesktopClient();
     const mockDesktopManager = createMockDesktopManager();
-    
-    vi.mocked(mockAgentDesktop.listWindows).mockResolvedValue([
-      { id: 'w-1', app_name: 'notepad.exe', title: 'Notepad', pid: 1, accessible: true, visible: true, minimized: false, is_focused: true, bounds: { x: 0, y: 0, width: 800, height: 600 } },
+
+    const agentListWindows = vi.fn().mockResolvedValue([
+      {
+        id: 'w-1',
+        app_name: 'notepad.exe',
+        title: 'Notepad',
+        pid: 1,
+        accessible: true,
+        visible: true,
+        minimized: false,
+        is_focused: true,
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+      },
     ]);
-    vi.mocked(mockDesktopManager.listWindows).mockResolvedValue([
-      { handle: 1, title: 'Notepad', process_id: 1, class_name: 'Notepad', backend: 'uia', rect: { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 } },
+    mockAgentDesktop.listWindows = agentListWindows;
+    const pywinautoListWindows = vi.fn().mockResolvedValue([
+      {
+        handle: 1,
+        title: 'Notepad',
+        process_id: 1,
+        class_name: 'Notepad',
+        backend: 'uia',
+        rect: { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 },
+      },
     ]);
-    
-    vi.mocked(mockAgentDesktop.snapshot).mockImplementation(async () => {
-      await new Promise(r => setTimeout(r, 100));
+    mockDesktopManager.listWindows = pywinautoListWindows;
+
+    const agentSnapshot = vi.fn().mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 100));
       return { snapshot_id: 'test', tree: {} };
     });
-    
-    vi.mocked(mockDesktopManager.getControls).mockImplementation(async () => {
-      await new Promise(r => setTimeout(r, 50));
+    mockAgentDesktop.snapshot = agentSnapshot;
+
+    const pywinautoGetControls = vi.fn().mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 50));
       return [];
     });
+    mockDesktopManager.getControls = pywinautoGetControls;
 
     const router = new BackendRouter({
       registry: mockRegistry,

@@ -2,6 +2,7 @@ import type { BackendName, ToolRegistry, Logger } from './types.js';
 import { DesktopBackendSelector } from '../desktop/backend-selector.js';
 import type { AgentDesktopClient } from '../desktop/agent-desktop-client.js';
 import type { DesktopManager } from '../desktop/desktop-manager.js';
+import type { BrowserManager } from '../browser/browser-manager.js';
 
 export interface BackendCapabilities {
   readonly name: BackendName;
@@ -16,6 +17,7 @@ export interface BackendRouterOptions {
   readonly logger: Logger;
   readonly agentDesktopClient?: AgentDesktopClient;
   readonly desktopManager?: DesktopManager;
+  readonly browserManager?: BrowserManager;
   readonly playwriterAvailable?: () => Promise<boolean>;
   readonly visionAvailable?: () => Promise<boolean>;
 }
@@ -24,17 +26,20 @@ export class BackendRouter {
   private readonly logger: Logger;
   private readonly agentDesktopClient: AgentDesktopClient | undefined;
   private readonly desktopManager: DesktopManager | undefined;
+  private readonly browserManager: BrowserManager | undefined;
   private readonly desktopSelector?: DesktopBackendSelector;
   private readonly playwriterAvailable: () => Promise<boolean>;
   private readonly visionAvailable: () => Promise<boolean>;
   private cachedCapabilities: BackendCapabilities[] | null = null;
   private cachedAt = 0;
   private readonly cacheTtlMs = 30_000;
+  private readonly negativeCacheTtlMs = 5_000;
 
   public constructor(options: BackendRouterOptions) {
     this.logger = options.logger;
     this.agentDesktopClient = options.agentDesktopClient ?? undefined;
     this.desktopManager = options.desktopManager ?? undefined;
+    this.browserManager = options.browserManager ?? undefined;
     this.playwriterAvailable = options.playwriterAvailable ?? (() => Promise.resolve(false));
     this.visionAvailable = options.visionAvailable ?? (() => Promise.resolve(false));
 
@@ -48,13 +53,23 @@ export class BackendRouter {
 
   public async getCapabilities(force = false): Promise<BackendCapabilities[]> {
     const now = Date.now();
-    if (!force && this.cachedCapabilities && now - this.cachedAt < this.cacheTtlMs) {
-      return this.cachedCapabilities;
+    if (!force && this.cachedCapabilities) {
+      const cacheAgeMs = now - this.cachedAt;
+      const hasUnavailable = this.cachedCapabilities.some((capability) => !capability.available);
+      const ttlMs = hasUnavailable ? this.negativeCacheTtlMs : this.cacheTtlMs;
+      if (cacheAgeMs < ttlMs) {
+        if (hasUnavailable) {
+          this.logger.debug('backend_router.negative_cache_hit', { cacheAgeMs });
+        }
+        return this.cachedCapabilities;
+      }
     }
 
     const capabilities: BackendCapabilities[] = [];
 
-    const playwriterAvail = await this.playwriterAvailable();
+    // Check Playwriter availability via browser manager if available
+    const playwriterAvail = await this.isPlaywriterAvailable();
+
     capabilities.push({
       name: 'playwriter',
       available: playwriterAvail,
@@ -73,13 +88,16 @@ export class BackendRouter {
 
     if (this.desktopSelector) {
       const selection = await this.desktopSelector.select({ force });
-      const adAvailable = selection.probes.find((p) => p.backend === 'agent-desktop')?.available ?? false;
-      const pwAvailable = selection.probes.find((p) => p.backend === 'pywinauto')?.available ?? false;
+      const adAvailable =
+        selection.probes.find((p) => p.backend === 'agent-desktop')?.available ?? false;
+      const pwAvailable =
+        selection.probes.find((p) => p.backend === 'pywinauto')?.available ?? false;
 
       capabilities.push({
         name: 'agent-desktop',
         available: adAvailable,
-        latencyMs: selection.probes.find((p) => p.backend === 'agent-desktop')?.treeLatencyMs ?? null,
+        latencyMs:
+          selection.probes.find((p) => p.backend === 'agent-desktop')?.treeLatencyMs ?? null,
         supports: [
           'desktop_ax_status',
           'desktop_ax_list_windows',
@@ -114,10 +132,7 @@ export class BackendRouter {
       name: 'vision',
       available: visionAvail,
       latencyMs: visionAvail ? 0 : null,
-      supports: [
-        'desktop_vision_locate',
-        'browser_vision_locate',
-      ],
+      supports: ['desktop_vision_locate', 'browser_vision_locate'],
       scope: 'vision',
     });
 
@@ -170,20 +185,37 @@ export class BackendRouter {
     if (toolName.startsWith('desktop_ax_')) {
       return 'agent-desktop';
     }
-    if (toolName.startsWith('desktop_') && !toolName.startsWith('desktop_ax_') && !toolName.startsWith('desktop_vision')) {
+    if (
+      toolName.startsWith('desktop_') &&
+      !toolName.startsWith('desktop_ax_') &&
+      !toolName.startsWith('desktop_vision')
+    ) {
       return 'pywinauto';
     }
     if (toolName.includes('vision')) {
       return 'vision';
     }
 
-    this.logger.warn('backend_router.no_match', { toolName, capabilities: capabilities.map((c) => c.name) });
+    this.logger.warn('backend_router.no_match', {
+      toolName,
+      capabilities: capabilities.map((c) => c.name),
+    });
     return 'playwriter';
   }
 
   public invalidateCache(): void {
     this.cachedCapabilities = null;
     this.cachedAt = 0;
+  }
+
+  private async isPlaywriterAvailable(): Promise<boolean> {
+    if (!this.browserManager) return this.playwriterAvailable();
+    try {
+      const status = await this.browserManager.getRelayProcessStatus();
+      return status.listening && (status.owner === 'jarvis' || status.owner === 'external');
+    } catch {
+      return this.playwriterAvailable();
+    }
   }
 }
 

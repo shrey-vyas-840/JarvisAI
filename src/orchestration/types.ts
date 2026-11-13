@@ -1,12 +1,8 @@
 export type PlanState =
-  | 'PLANNED'
-  | 'RUNNING'
-  | 'WAITING_FOR_USER'
-  | 'COMPLETED'
-  | 'PARTIALLY_COMPLETED'
-  | 'FAILED';
+  'PLANNED' | 'RUNNING' | 'WAITING_FOR_USER' | 'COMPLETED' | 'PARTIALLY_COMPLETED' | 'FAILED';
 
-export type StepState = 'PENDING' | 'RUNNING' | 'WAITING_VERIFICATION' | 'VERIFIED' | 'FAILED' | 'SKIPPED';
+export type StepState =
+  'PENDING' | 'RUNNING' | 'WAITING_VERIFICATION' | 'VERIFIED' | 'FAILED' | 'SKIPPED';
 
 export type BackendName = 'playwriter' | 'agent-desktop' | 'pywinauto' | 'vision';
 
@@ -80,7 +76,11 @@ export interface OrchestratorOptions {
 }
 
 export interface ToolRegistry {
-  execute(name: string, args: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolExecutionReceipt>;
+  execute(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionReceipt>;
   has(name: string): boolean;
   listNames(): string[];
 }
@@ -97,7 +97,14 @@ export interface ToolExecutionReceipt {
   executionId: string;
   callId: string;
   toolName: string;
-  status: 'success' | 'failure' | 'approval_required' | 'approval_unavailable' | 'denied' | 'timeout' | 'cancelled';
+  status:
+    | 'success'
+    | 'failure'
+    | 'approval_required'
+    | 'approval_unavailable'
+    | 'denied'
+    | 'timeout'
+    | 'cancelled';
   approval: 'not_required' | 'required' | 'approved' | 'denied' | 'cancelled' | 'unavailable';
   verification: 'verified' | 'failed' | 'not_applicable';
   result: unknown;

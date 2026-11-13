@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { HELP_TEXT, runCli, type CliDependencies } from '../src/cli.js';
 import { loadConfig } from '../src/config.js';
+import { DesktopManager } from '../src/desktop/desktop-manager.js';
 import type { HealthReport } from '../src/health/types.js';
 
 interface CapturedIo {
@@ -157,7 +158,19 @@ describe('cli', () => {
 
   it('runs desktop windows CLI command', async () => {
     const captured = captureIo();
-    const code = await runCli(['desktop', 'windows'], captured.io);
+    class DesktopManagerFixture extends DesktopManager {
+      public override listWindows() {
+        return Promise.resolve([]);
+      }
+
+      public override dispose(): void {
+        super.dispose();
+      }
+    }
+    const code = await runCli(['desktop', 'windows'], captured.io, {
+      ...createDependencies(createHealthReport()),
+      createDesktopManager: () => new DesktopManagerFixture(),
+    });
     expect(code).toBe(0);
     expect(captured.stdout.join('')).toContain('Visible Desktop Windows');
   });

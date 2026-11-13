@@ -1,5 +1,24 @@
 # JARVIS Agent - TypeScript Compilation Issues Documentation
 
+## 2026-11-14 recovery ledger update
+
+The historical entries below describe earlier states and failed attempts. Fresh results on the current recovery working tree:
+
+| Error                                            | File and current line                                   | Error code              | Root cause                                                                                                          | Minimal fix                                                                                                                                                   | Verification                            |
+| ------------------------------------------------ | ------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Three reported CLI unsafe calls                  | `src/cli.ts`                                            | ESLint `no-unsafe-call` | Stale editor diagnostics; fresh CLI lint has no findings                                                            | No source suppression or broad rewrite; verify with no-cache ESLint                                                                                           | `npx eslint src/cli.ts --no-cache` PASS |
+| Full-project lint failures                       | `milestone3-demo.ts`, orchestration files/tests         | ESLint                  | Demo was outside TS project-service scope; unused/unsafe/narrowing/style issues across demo and orchestration/tests | Allow the real root demo in ESLint default project; make focused typing, logic, and formatting fixes                                                          | `npm run lint` PASS                     |
+| Formatting failures                              | Earlier diagnostics listed 9 files; no current failures | Prettier                | Existing style drift in docs/demo/orchestration                                                                     | Apply Prettier to affected files                                                                                                                              | `npm run format:check` PASS             |
+| Desktop CLI test failure                         | `tests/cli.test.ts`                                     | native runtime `ENOMEM` | Test invoked real desktop sidecar under an environment without usable desktop/Python runtime                        | Inject a fixture desktop manager into the CLI test                                                                                                            | Full test suite PASS, 297 tests         |
+| Stale Agent Desktop snapshot leaves plan PLANNED | `src/orchestration/orchestrator.ts`                     | state correctness       | Retry exhaustion did not settle failed step/plan and reused an invalid ref                                          | On explicitly not-delivered stale ref, refresh snapshot, resolve uniquely, retry once; settle failures and block descendants; do not replay uncertain actions | Focused orchestrator tests PASS         |
+
+### Current verification and live boundary
+
+- `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test` (41 files / 297 tests), and `npm run build` all pass. Targeted CLI ESLint also passes with zero diagnostics.
+- Runtime: Ollama/Qwen is available; external Playwriter relay and extension are browser-ready. Agent Desktop cannot access a state file owned by another Windows principal and selector probing reports `EnumWindows` failure. pywinauto cannot start because global Python is absent and the project venv points to a missing Python 3.12 installation.
+- Backend selection currently returns no desktop backend. Therefore the GitHub/Maps/Gemini workflow was not attempted. See `docs/PHASE-6-READINESS.md` for evidence and limitations.
+- Starting commit was `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; changes are currently uncommitted. Update this checkpoint after intentional commit.
+
 ## Project Context
 
 - **Repository**: D:\AI\JarvisAgent

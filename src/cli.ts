@@ -46,6 +46,7 @@ export interface CliDependencies {
   loadConfig: () => AppConfig;
   runHealthChecks: typeof runHealthChecks;
   runAgent?: AgentRunner;
+  createDesktopManager?: () => DesktopManager;
 }
 
 export const HELP_TEXT = `${getVersionLabel()}
@@ -137,7 +138,11 @@ export async function runCli(
   }
 
   if (command === 'desktop') {
-    return runDesktopCommand(options, io);
+    return runDesktopCommand(
+      options,
+      io,
+      dependencies.createDesktopManager ?? (() => new DesktopManager()),
+    );
   }
 
   if (command === 'vision') {
@@ -438,11 +443,15 @@ async function runBrowserCommand(options: readonly string[], io: CliIo): Promise
   return 1;
 }
 
-async function runDesktopCommand(options: readonly string[], io: CliIo): Promise<number> {
+async function runDesktopCommand(
+  options: readonly string[],
+  io: CliIo,
+  createDesktopManager: () => DesktopManager,
+): Promise<number> {
   const [subcommand, ...rest] = options;
 
   if (!subcommand || subcommand === 'windows') {
-    const desktop = new DesktopManager();
+    const desktop = createDesktopManager();
     try {
       const windows = await desktop.listWindows();
       io.stdout(`Visible Desktop Windows (${String(windows.length)}):\n`);
@@ -462,7 +471,7 @@ async function runDesktopCommand(options: readonly string[], io: CliIo): Promise
   }
 
   if (subcommand === 'screen-info') {
-    const desktop = new DesktopManager();
+    const desktop = createDesktopManager();
     try {
       const info = await desktop.getScreenInfo();
       io.stdout(`${JSON.stringify(info, null, 2)}\n`);
@@ -477,7 +486,7 @@ async function runDesktopCommand(options: readonly string[], io: CliIo): Promise
   }
 
   if (subcommand === 'screenshot') {
-    const desktop = new DesktopManager();
+    const desktop = createDesktopManager();
     try {
       const config = loadConfig();
       const filename = (rest.join(' ').trim() || `desktop-${String(Date.now())}.png`).replace(
@@ -511,7 +520,7 @@ async function runDesktopCommand(options: readonly string[], io: CliIo): Promise
       return 1;
     }
 
-    const desktop = new DesktopManager();
+    const desktop = createDesktopManager();
     try {
       const config = loadConfig();
       const analyzer = new VisionAnalyzer({

@@ -29,7 +29,9 @@ export default tseslint.config(
     files: tsFiles,
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          allowDefaultProject: ['milestone3-demo.ts'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

@@ -1,5 +1,20 @@
 # Test Report
 
+## Phase 6 recovery gate — 2026-11-14
+
+| Gate                               | Result                            |
+| ---------------------------------- | --------------------------------- |
+| `npm run typecheck`                | PASS, no diagnostics              |
+| `npm run lint`                     | PASS, zero ESLint errors          |
+| `npm run format:check`             | PASS, all matched files formatted |
+| `npm test`                         | PASS, 41 files and 297 tests      |
+| `npm run build`                    | PASS                              |
+| `npx eslint src/cli.ts --no-cache` | PASS, zero diagnostics            |
+
+The reported three CLI `no-unsafe-call` Problems-panel diagnostics were not present in fresh ESLint output. The full lint gate’s previous failures were fixed, including ESLint project-service configuration for the existing root-level demo. The desktop CLI test now injects a fixture instead of requiring an available Windows desktop sidecar; no test was skipped. Orchestration coverage now includes stale accessibility reference recovery, retry exhaustion and dependent-step blocking, and uncertain action delivery.
+
+Live runtime evidence is recorded separately in `PHASE-6-READINESS.md`. Browser readiness and Ollama availability passed; desktop backends are blocked in this environment, so the multi-application acceptance workflow was not attempted.
+
 ## Phase 5 final acceptance — 2026-11-13
 
 Status: **host gate green; desktop Tests 1–3, browser Test 4, and extension popup Test 5A LIVE_VERIFIED; extension report Test 5 blocked by missing target extension**

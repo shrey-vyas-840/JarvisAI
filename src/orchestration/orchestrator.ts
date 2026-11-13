@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import type {
   Plan,
   Step,
   PlanState,
-  StepState,
   ExecutionContext,
   OrchestratorOptions,
   ToolRegistry,
@@ -19,6 +18,14 @@ const DEFAULT_MAX_RETRIES = 2;
 
 function isTerminalPlanState(state: PlanState): boolean {
   return state === 'COMPLETED' || state === 'PARTIALLY_COMPLETED' || state === 'FAILED';
+}
+
+function isWaitingForUser(plan: Plan): boolean {
+  return plan.state === 'WAITING_FOR_USER';
+}
+
+function isAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
 }
 
 function allDependenciesMet(step: Step, steps: Step[]): boolean {
@@ -60,6 +67,63 @@ function computePlanState(steps: Step[]): PlanState {
     return 'PLANNED';
   }
   return 'PARTIALLY_COMPLETED';
+}
+
+function skipBlockedSteps(steps: Step[], completedAt: string): number {
+  let skipped = 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const step of steps) {
+      if (
+        step.state === 'PENDING' &&
+        step.dependsOn.some((dependencyId) => {
+          const dependency = steps.find((candidate) => candidate.id === dependencyId);
+          return dependency?.state === 'FAILED' || dependency?.state === 'SKIPPED';
+        })
+      ) {
+        step.state = 'SKIPPED';
+        step.error = 'Blocked by a failed or skipped dependency.';
+        step.completedAt = completedAt;
+        skipped += 1;
+        changed = true;
+      }
+    }
+  }
+  return skipped;
+}
+
+function getUniqueRef(result: unknown): string | null {
+  if (!isRecord(result) || !isRecord(result.result) || !Array.isArray(result.result.matches)) {
+    return null;
+  }
+  if (result.result.matches.length !== 1) return null;
+  const match: unknown = result.result.matches[0];
+  if (!isRecord(match) || typeof match.ref_id !== 'string') return null;
+  return match.ref_id;
+}
+
+function resultContainsRef(result: unknown, expectedRef: string): boolean {
+  if (!isRecord(result) || !isRecord(result.result) || !Array.isArray(result.result.matches)) {
+    return false;
+  }
+  return result.result.matches.some(
+    (match: unknown) => isRecord(match) && match.ref_id === expectedRef,
+  );
+}
+
+function isPotentialActionTool(toolName: string): boolean {
+  return /(?:action|click|fill|type|press|submit|write|create|delete|move|toggle|check|uncheck|expand|collapse|set_value|send)/i.test(
+    toolName,
+  );
+}
+
+function hasSafeNotDeliveredDisposition(error: string | null): boolean {
+  return error !== null && error.includes('delivery=not_delivered') && error.includes('retry=safe');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function sanitizeForPersistence(obj: unknown): unknown {
@@ -117,7 +181,10 @@ export class Orchestrator {
     this.signal = this.abortController.signal;
   }
 
-  public async createPlan(goal: string, steps: (Omit<Step, 'id' | 'state' | 'retryCount'> & { id?: string })[]): Promise<Plan> {
+  public async createPlan(
+    goal: string,
+    steps: (Omit<Step, 'id' | 'state' | 'retryCount'> & { id?: string })[],
+  ): Promise<Plan> {
     const plan: Plan = {
       id: this.idFactory(),
       goal,
@@ -126,7 +193,7 @@ export class Orchestrator {
       steps: steps.map((s) => ({
         ...s,
         id: s.id ?? this.idFactory(),
-        state: 'PENDING' as StepState,
+        state: 'PENDING',
         retryCount: 0,
       })),
       state: 'PLANNED',
@@ -139,15 +206,17 @@ export class Orchestrator {
   }
 
   public async loadPlan(planId: string): Promise<Plan | null> {
-    if (!this.persistencePath) {
+    if (this.persistencePath === null) {
       return null;
     }
     const filePath = resolve(this.persistencePath, `${planId}.json`);
-    if (!existsSync(filePath)) {
+    try {
+      await access(filePath);
+    } catch {
       return null;
     }
     try {
-      const content = readFileSync(filePath, 'utf8');
+      const content = await readFile(filePath, 'utf8');
       const persisted = JSON.parse(content) as PersistedPlan;
       const plan: Plan = {
         ...persisted,
@@ -174,9 +243,14 @@ export class Orchestrator {
     plan.updatedAt = this.now().toISOString();
     await this.persist();
 
-    while (!isTerminalPlanState(plan.state) && !this.signal.aborted) {
+    while (!isTerminalPlanState(plan.state) && !isWaitingForUser(plan) && !isAborted(this.signal)) {
       const step = getNextRunnableStep(plan);
       if (!step) {
+        skipBlockedSteps(plan.steps, this.now().toISOString());
+        if (plan.steps.some((candidate) => candidate.state === 'PENDING')) {
+          plan.state = 'FAILED';
+          plan.error = 'Plan contains steps with dependencies that cannot be satisfied.';
+        }
         break;
       }
 
@@ -191,7 +265,7 @@ export class Orchestrator {
       await this.persist();
     }
 
-    if (!isTerminalPlanState(plan.state)) {
+    if (!isTerminalPlanState(plan.state) && !isWaitingForUser(plan)) {
       plan.state = computePlanState(plan.steps);
     }
     plan.updatedAt = this.now().toISOString();
@@ -271,8 +345,15 @@ export class Orchestrator {
 
     const context = this.createToolContext(plan.id, step.id);
 
+    let staleRecoveryAttempted = false;
     try {
-      const receipt = await this.registry.execute(step.tool, step.args, context);
+      let receipt = await this.registry.execute(step.tool, step.args, context);
+
+      if (this.isSafelyRecoverableStaleReference(step, receipt)) {
+        staleRecoveryAttempted = true;
+        step.retryCount += 1;
+        receipt = await this.recoverStaleDesktopAction(plan, step, context);
+      }
 
       if (receipt.status === 'cancelled') {
         step.state = 'FAILED';
@@ -282,7 +363,11 @@ export class Orchestrator {
       }
 
       if (receipt.status === 'failure' || receipt.status === 'timeout') {
-        if (step.retryCount < this.maxRetries) {
+        if (
+          !staleRecoveryAttempted &&
+          step.retryCount < this.maxRetries &&
+          (!isPotentialActionTool(step.tool) || hasSafeNotDeliveredDisposition(receipt.error))
+        ) {
           step.retryCount += 1;
           step.state = 'PENDING';
           this.logger.warn('orchestrator.step_retry', {
@@ -321,7 +406,7 @@ export class Orchestrator {
           this.updateContextFromResult(plan, step, receipt.result);
           this.logger.info('orchestrator.step_verified', { planId: plan.id, stepId: step.id });
         } else {
-          if (step.retryCount < this.maxRetries) {
+          if (!isPotentialActionTool(step.tool) && step.retryCount < this.maxRetries) {
             step.retryCount += 1;
             step.state = 'PENDING';
             this.logger.warn('orchestrator.step_verification_failed_retry', {
@@ -333,7 +418,10 @@ export class Orchestrator {
           }
           step.state = 'FAILED';
           step.error = 'Verification failed';
-          this.logger.error('orchestrator.step_verification_failed', { planId: plan.id, stepId: step.id });
+          this.logger.error('orchestrator.step_verification_failed', {
+            planId: plan.id,
+            stepId: step.id,
+          });
         }
       } else {
         step.state = 'VERIFIED';
@@ -343,10 +431,24 @@ export class Orchestrator {
 
       return 'SUCCESS';
     } catch (error) {
-      if (this.signal.aborted) {
+      if (isAborted(this.signal)) {
         return 'ABORTED';
       }
-      if (step.retryCount < this.maxRetries) {
+      if (staleRecoveryAttempted) {
+        step.state = 'FAILED';
+        step.error = `Stale accessibility reference recovery failed: ${formatError(error)}`;
+        step.completedAt = this.now().toISOString();
+        this.logger.error('orchestrator.stale_ref_recovery_failed', {
+          planId: plan.id,
+          stepId: step.id,
+          error: step.error,
+        });
+        return 'FAILED';
+      }
+      if (
+        step.retryCount < this.maxRetries &&
+        (!isPotentialActionTool(step.tool) || hasSafeNotDeliveredDisposition(formatError(error)))
+      ) {
         step.retryCount += 1;
         step.state = 'PENDING';
         this.logger.warn('orchestrator.step_exception_retry', {
@@ -360,17 +462,96 @@ export class Orchestrator {
       step.state = 'FAILED';
       step.error = formatError(error);
       step.completedAt = this.now().toISOString();
-      this.logger.error('orchestrator.step_failed', { planId: plan.id, stepId: step.id, error: formatError(error) });
+      this.logger.error('orchestrator.step_failed', {
+        planId: plan.id,
+        stepId: step.id,
+        error: formatError(error),
+      });
       return 'FAILED';
     }
   }
 
-  private async verifyStep(plan: Plan, step: Step, context: ToolExecutionContext): Promise<boolean> {
+  private isSafelyRecoverableStaleReference(
+    step: Step,
+    receipt: Awaited<ReturnType<ToolRegistry['execute']>>,
+  ): boolean {
+    return (
+      step.tool === 'desktop_ax_action' &&
+      step.retryCount < this.maxRetries &&
+      receipt.status === 'failure' &&
+      receipt.error !== null &&
+      receipt.error.includes('INVALID_ARGS: Invalid snapshot_id') &&
+      receipt.error.includes('delivery=not_delivered') &&
+      receipt.error.includes('retry=safe')
+    );
+  }
+
+  private async recoverStaleDesktopAction(
+    plan: Plan,
+    step: Step,
+    context: ToolExecutionContext,
+  ): Promise<Awaited<ReturnType<ToolRegistry['execute']>>> {
+    const actionIndex = plan.steps.findIndex((candidate) => candidate.id === step.id);
+    const locatorStep = plan.steps
+      .slice(0, actionIndex)
+      .findLast(
+        (candidate) => candidate.tool === 'desktop_ax_find' && candidate.state === 'VERIFIED',
+      );
+    if (!locatorStep)
+      throw new Error('No prior accessibility locator is available to re-resolve the target.');
+    const staleRef = step.args.ref;
+    if (typeof staleRef !== 'string' || !resultContainsRef(locatorStep.result, staleRef)) {
+      throw new Error(
+        'The prior accessibility lookup did not produce the action target being refreshed.',
+      );
+    }
+
+    const app = locatorStep.args.app;
+    const windowId = locatorStep.args.window_id;
+    if (typeof app !== 'string' && typeof windowId !== 'string') {
+      throw new Error(
+        'The prior accessibility locator has no app or window_id scope for a fresh snapshot.',
+      );
+    }
+
+    const snapshotArgs: Record<string, unknown> = {
+      interactive_only: true,
+      compact: true,
+      ...(typeof app === 'string' ? { app } : {}),
+      ...(typeof windowId === 'string' ? { window_id: windowId } : {}),
+    };
+    const snapshot = await this.registry.execute('desktop_ax_snapshot', snapshotArgs, context);
+    if (snapshot.status !== 'success') {
+      throw new Error(snapshot.error ?? 'Fresh accessibility snapshot failed.');
+    }
+
+    const locatorArgs: Record<string, unknown> = { ...locatorStep.args, first: false, limit: 2 };
+    delete locatorArgs.root;
+    const resolved = await this.registry.execute('desktop_ax_find', locatorArgs, context);
+    if (resolved.status !== 'success') {
+      throw new Error(resolved.error ?? 'Fresh accessibility target lookup failed.');
+    }
+    const matchRef = getUniqueRef(resolved.result);
+    if (!matchRef)
+      throw new Error('Fresh accessibility lookup did not return exactly one actionable match.');
+
+    return this.registry.execute('desktop_ax_action', { ...step.args, ref: matchRef }, context);
+  }
+
+  private async verifyStep(
+    plan: Plan,
+    step: Step,
+    context: ToolExecutionContext,
+  ): Promise<boolean> {
     if (!step.verification) {
       return true;
     }
     const { tool, args, expected } = step.verification;
-    this.logger.info('orchestrator.verification_started', { planId: plan.id, stepId: step.id, tool });
+    this.logger.info('orchestrator.verification_started', {
+      planId: plan.id,
+      stepId: step.id,
+      tool,
+    });
 
     try {
       const receipt = await this.registry.execute(tool, args, context);
@@ -393,12 +574,14 @@ export class Orchestrator {
     if (Array.isArray(a) !== Array.isArray(b)) {
       return false;
     }
-    const keysA = Object.keys(a as Record<string, unknown>);
-    const keysB = Object.keys(b as Record<string, unknown>);
+    const keysA = Object.keys(a);
+    const keysB = Object.keys(b);
     if (keysA.length !== keysB.length) {
       return false;
     }
-    return keysA.every((key) => this.deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
+    return keysA.every((key) =>
+      this.deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    );
   }
 
   private updateContextFromResult(plan: Plan, _step: Step, result: unknown): void {
@@ -407,10 +590,16 @@ export class Orchestrator {
     }
     const record = result as Record<string, unknown>;
     if (record.browserTabs) {
-      plan.context = { ...plan.context, browserTabs: record.browserTabs as ExecutionContext['browserTabs'] };
+      plan.context = {
+        ...plan.context,
+        browserTabs: record.browserTabs as ExecutionContext['browserTabs'],
+      };
     }
     if (record.desktopWindows) {
-      plan.context = { ...plan.context, desktopWindows: record.desktopWindows as ExecutionContext['desktopWindows'] };
+      plan.context = {
+        ...plan.context,
+        desktopWindows: record.desktopWindows as ExecutionContext['desktopWindows'],
+      };
     }
     if (record.activeApp) {
       plan.context = { ...plan.context, activeApp: record.activeApp as string };
@@ -425,7 +614,10 @@ export class Orchestrator {
       plan.context = { ...plan.context, lastScreenshotPath: record.screenshotPath as string };
     }
     if (record.variables) {
-      plan.context = { ...plan.context, variables: { ...plan.context.variables, ...(record.variables as Record<string, unknown>) } };
+      plan.context = {
+        ...plan.context,
+        variables: { ...plan.context.variables, ...(record.variables as Record<string, unknown>) },
+      };
     }
   }
 
@@ -452,10 +644,10 @@ export class Orchestrator {
       return;
     }
     try {
-      mkdirSync(this.persistencePath, { recursive: true });
+      await mkdir(this.persistencePath, { recursive: true });
       const filePath = resolve(this.persistencePath, `${this.currentPlan.id}.json`);
       const sanitized = sanitizeForPersistence(this.currentPlan) as PersistedPlan;
-      writeFileSync(filePath, JSON.stringify(sanitized, null, 2), 'utf8');
+      await writeFile(filePath, JSON.stringify(sanitized, null, 2), 'utf8');
     } catch (error) {
       this.logger.error('orchestrator.persist_failed', { error: formatError(error) });
     }

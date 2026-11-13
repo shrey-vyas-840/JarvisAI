@@ -1,22 +1,20 @@
 #!/usr/bin/env node
 /**
  * Phase 6 Milestone 3 Demo
- * 
+ *
  * This script demonstrates the JARVIS orchestration capabilities by running
  * the AgentLoop with a natural-language instruction that exercises:
  * - Desktop automation (Agent Desktop tools)
  * - Orchestration state machine
  * - Backend selection
  * - Verification and retry logic
- * 
+ *
  * Note: Browser automation (Playwriter) is currently offline, so browser
  * tasks (GitHub, Google Maps, Gemini) are documented as would-be steps.
  */
 
 import { loadConfig } from './src/config.js';
-import { AgentLoop } from './src/core/agent-loop.js';
 import { ToolRegistry } from './src/core/tool-registry.js';
-import { OllamaClient } from './src/llm/ollama-client.js';
 import { Logger } from './src/logging/logger.js';
 import { CliApprovalProvider } from './src/security/cli-approval-provider.js';
 import { createFilesystemTools } from './src/tools/filesystem/index.js';
@@ -57,13 +55,6 @@ async function main() {
   });
 
   // Initialize Ollama client
-  const client = new OllamaClient({
-    baseUrl: config.ollama.baseUrl,
-    model: config.ollama.model,
-    numCtx: config.ollama.numCtx,
-    temperature: 0.2,
-  });
-
   // Initialize desktop components
   const desktopManager = new DesktopManager();
   const agentDesktopClient = new AgentDesktopClient();
@@ -88,10 +79,12 @@ async function main() {
   });
   try {
     const selection = await backendSelector.select({ force: true });
-    console.log(`  Selected: ${selection.selected}`);
+    console.log(`  Selected: ${selection.selected ?? 'none'}`);
     console.log(`  Reason: ${selection.reason}`);
     for (const probe of selection.probes) {
-      console.log(`  ${probe.backend}: available=${probe.available}, listLatency=${probe.latencyMs}ms, treeLatency=${probe.treeLatencyMs}ms, focused="${probe.focusedTitle ?? 'none'}"`);
+      console.log(
+        `  ${probe.backend}: available=${String(probe.available)}, listLatency=${probe.latencyMs === null ? 'N/A' : String(probe.latencyMs)}ms, treeLatency=${probe.treeLatencyMs === null ? 'N/A' : String(probe.treeLatencyMs)}ms, focused="${probe.focusedTitle ?? 'none'}"`,
+      );
     }
   } catch (e) {
     console.log(`  Error: ${e instanceof Error ? e.message : 'Unknown'}`);
@@ -99,7 +92,7 @@ async function main() {
 
   // Initialize Orchestrator
   const registry = new ToolRegistry({ approvalProvider: new CliApprovalProvider() });
-  
+
   // Register all tools
   const tools = [
     createGetJarvisStatusTool(config),
@@ -124,13 +117,13 @@ async function main() {
 
   // Test Orchestrator with a simple desktop automation plan
   console.log('\n--- Orchestrator Demo: Notepad Automation ---');
-  
+
   const builder = new PlanBuilder();
   builder
     .addDesktopSnapshot('notepad.exe', 'Snapshot Notepad')
     .addDesktopFind('notepad.exe', 'textfield', 'Find text field')
     .addDesktopAction('click', '@s1:e1', 'Click text field')
-    .addDesktopAction('set_value', '@s1:e1', 'Set value to "JARVIS Milestone 3"', 'pywinauto')
+    .addDesktopAction('set_value', '@s1:e1', 'Set value to "JARVIS Milestone 3"')
     .addDesktopWait('@s1:e1', 'value', 'Wait for value to be set')
     .dependsOn('Find text field', 'Snapshot Notepad')
     .dependsOn('Click text field', 'Find text field')
@@ -138,11 +131,13 @@ async function main() {
     .dependsOn('Wait for value to be set', 'Set value to "JARVIS Milestone 3"');
 
   const planData = builder.build('Automate Notepad text input');
-  
+
   console.log(`\nPlan: ${planData.goal}`);
-  console.log(`Steps: ${planData.steps.length}`);
+  console.log(`Steps: ${String(planData.steps.length)}`);
   for (const step of planData.steps) {
-    console.log(`  ${step.description}: ${step.tool} (backend: ${step.backend}, deps: ${step.dependsOn.join(', ') || 'none'})`);
+    console.log(
+      `  ${step.description}: ${step.tool} (backend: ${step.backend}, deps: ${step.dependsOn.join(', ') || 'none'})`,
+    );
   }
 
   const plan = await orchestrator.createPlan(planData.goal, planData.steps);
@@ -153,9 +148,11 @@ async function main() {
   console.log('\nRunning plan...');
   const result = await orchestrator.runPlan();
   console.log(`\nPlan completed: ${result.state}`);
-  console.log(`Steps: ${result.steps.length}`);
+  console.log(`Steps: ${String(result.steps.length)}`);
   for (const step of result.steps) {
-    console.log(`  ${step.description}: ${step.state} (backend: ${step.backend})${step.error ? ` - ${step.error}` : ''}`);
+    console.log(
+      `  ${step.description}: ${step.state} (backend: ${step.backend})${step.error ? ` - ${step.error}` : ''}`,
+    );
   }
 
   // Test BackendRouter
@@ -172,12 +169,19 @@ async function main() {
   const capabilities = await router.getCapabilities(true);
   console.log('Available backends:');
   for (const cap of capabilities) {
-    console.log(`  ${cap.name}: available=${cap.available}, latency=${cap.latencyMs}ms, scope=${cap.scope}`);
+    console.log(
+      `  ${cap.name}: available=${String(cap.available)}, latency=${cap.latencyMs === null ? 'N/A' : String(cap.latencyMs)}ms, scope=${cap.scope}`,
+    );
     console.log(`    supports: ${cap.supports.join(', ')}`);
   }
 
   // Test routing
-  const testTools = ['desktop_ax_snapshot', 'desktop_ax_action', 'browser_navigate', 'desktop_vision_locate'];
+  const testTools = [
+    'desktop_ax_snapshot',
+    'desktop_ax_action',
+    'browser_navigate',
+    'desktop_vision_locate',
+  ];
   for (const tool of testTools) {
     const backend = await router.routeTool(tool);
     console.log(`  ${tool} -> ${backend}`);
@@ -256,7 +260,7 @@ Safety Requirements:
   logger.info('Demo completed');
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   console.error('Demo failed:', error);
   process.exit(1);
 });
