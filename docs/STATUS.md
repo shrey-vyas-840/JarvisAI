@@ -1,6 +1,6 @@
 # JARVIS Status
 
-Last updated: 2026-11-10
+Last updated: 2026-11-13
 
 ## Current position
 
@@ -10,7 +10,7 @@ Last updated: 2026-11-10
 - Phase 3: complete; read-only filesystem tools implemented and verified.
 - Phase 3B: approval-gated `create_directory` and `write_text_file` implemented, unit/integration tested, and live-tested with manual interactive approval.
 - Phase 4: live acceptance complete (2026-11-08); browser automation, web research, OpenStreetMap adapter, Excel builder, and Windows desktop sidecar implemented, unit-tested, and 5/5 live host tests LIVE_VERIFIED.
-- Phase 5: implementation complete and host gate green (2026-11-10); local Ollama vision, screenshot capture, extension discovery, browser session readiness/recovery, and `desktop_vision_click` are implemented and tested. Desktop live Tests 1–3 are LIVE_VERIFIED; browser live Test 4 is LIVE_VERIFIED. Browser Test 5 (extension report workflow) is BLOCKED_BY_MANUAL_ACTION because no suitable extension is installed.
+- Phase 5: implementation complete, committed as `734e777`, and host gate green on 2026-11-13 after a desktop input reliability fix; local Ollama vision, screenshot capture, extension discovery, browser session readiness/recovery, and `desktop_vision_click` are implemented and tested. Desktop live Tests 1–3, browser live Test 4, and extension popup Test 5A (Adblock Plus) are LIVE_VERIFIED. Browser Test 5 (extension report workflow) remains BLOCKED_BY_MANUAL_ACTION because no suitable audit/report extension is installed.
 
 ## What exists now
 
@@ -18,7 +18,7 @@ Last updated: 2026-11-10
 - Strict TypeScript configuration for type checking and a separate build configuration.
 - ESLint 10 flat configuration with type-aware TypeScript rules.
 - Prettier configuration and formatting check.
-- Vitest configuration and 230 passing tests across 34 files on the real host.
+- Vitest configuration and 245 passing tests across 35 files on the real host.
 - npm scripts for development, build, start, typecheck, lint, format, format check, and test.
 - Zod-validated configuration with safe local defaults, absolute path resolution, and optional `.env` loading.
 - Structured JSON logger with secret redaction, console/file output, level filtering, child bindings, and size-based rotation.
@@ -66,7 +66,7 @@ Last updated: 2026-11-10
   - Excel: after explicit approval, created `D:\AI\Exports\jarvis-phase4-acceptance.xlsx` (10,677 bytes; SHA-256 `42c0e159e4f3edb54b7d35c0be3025fd6833f68879d41edf85da2f3da852a326`); read-back verified 3 sheets, 4 business rows, summary, attribution, and overwrite rejection.
   - Crawler: evaluated 432 robots.txt rules and crawled `https://www.wikipedia.org/` (1 page, 8,899 characters, 784 ms) with same-domain boundaries enforced.
 - Phase 4 host verification: typecheck, lint, format check, and build passed; `npm test` reported 30 files and 212 tests passing.
-- Phase 5 host verification (2026-11-10): typecheck, lint, format check, and build passed; `npm test` reported 35 files and 245 tests passing.
+- Phase 5 host verification (2026-11-13, committed tree): typecheck, lint, format check, and build passed; `npm test` reported 35 files and 245 tests passing.
 - Phase 5 desktop live acceptance:
   - Notepad typing/read-back: a dedicated empty temp file was typed with `JARVIS Phase 5 safe notepad test 1794208064352` (46 characters); UI Automation read-back matched exactly; the disposable tab was closed and the temp file deleted.
   - Local vision accuracy: Qwen 3.5 9B located the Notepad “Edit” menu with confidence 0.98 at a 7 px center error versus UI Automation; inference took 4.34 s.
@@ -74,8 +74,10 @@ Last updated: 2026-11-10
 - Phase 5 vision coordinate protocol: the model returns normalized 0–1000 coordinates; the analyzer validates them on that grid, converts to image pixels, and drops out-of-grid rectangles. This fixed offset/out-of-bounds clicks caused by treating normalized values as pixels.
 - Phase 5 browser reliability (2026-11-10): `browser status` now parses the relay's actual `/extensions/status` payload and reports `unknown` instead of a false `0` when inventory fails. Active-tab selection now skips unresponsive targets (an attached ChatGPT target with an empty URL and a non-resolving `title()` caused hangs), all title reads are bounded, a readiness check proves the session with a harmless read, and stale-session navigation retries once after reconnecting.
 - Phase 5 browser live acceptance (2026-11-10): readiness READY in 870 ms; `browser tabs` completed in 2.6 s; navigate to `https://example.com/` returned `Example Domain`; a JARVIS-owned `https://example.org/` tab opened and closed cleanly; readiness recheck READY in 187 ms.
-- Phase 5 is uncommitted on `main`; no Phase 5 commit has been created.
-- Git repository on branch `main`, published to GitHub; Phase 1 commit `49aa18fc6660d1aa5f7f06d1aed5c5ac530395bb`; Phase 2 commit `59c6b10fc7a1871d22e7c52497f18f6b64b900bb`; Phase 3 commit `e713aea` preserved; Phase 4 implementation checkpoint `86b6ea83c818a1896f6bf928b6779623e81c720d`.
+- Phase 5 extension popup live acceptance (2026-11-13): opened the installed Adblock Plus popup through the Chrome Extensions menu, inspected its UI Automation tree, and drove a checkbox through `DesktopManager.mouseClick` for repeated on/off cycles (`[1,1]` initial → `[0,0]` → `[1,1]` → `[0,0]` → `[1,1]`) with state read-back after each click. The starting state was restored and the popup was closed; no extension files or settings were left modified.
+- Phase 5 desktop input reliability fix (2026-11-13): replaced pywinauto's absolute mouse helpers with `SetCursorPos` plus mouse events, added wheel-event scrolling and drag support, and added a `SetForegroundWindow` fallback so physical input is delivered to the intended target instead of an unrelated foreground window.
+- Phase 5 implementation is committed on `main` as `734e777`; the 2026-11-13 input fix and documentation are in the follow-up commit.
+- Git repository on branch `main`, published to GitHub; Phase 1 commit `49aa18fc6660d1aa5f7f06d1aed5c5ac530395bb`; Phase 2 commit `59c6b10fc7a1871d22e7c52497f18f6b64b900bb`; Phase 3 commit `e713aea` preserved; Phase 4 implementation checkpoint `86b6ea83c818a1896f6bf928b6779623e81c720d`; Phase 5 commit `734e777`.
 - Documentation baseline, Phase 2 handoff, Phase 3 handoff/status, Phase 3 completion records, `docs/SECURITY.md`, `docs/PHASE-3B-HANDOFF.md`, `docs/PHASE-4-HANDOFF.md`, and `docs/DATA-SOURCES.md`.
 
 ## What does not exist yet
@@ -114,4 +116,6 @@ Last updated: 2026-11-10
 - `desktop_vision_click` performs at most one click per call, re-observes afterward, and never auto-repeats a click; missing confidence fails closed.
 - A pre-existing Windows 11 Notepad user tab was affected by the first live attempt because Notepad is single-instance. The original 646-character buffer was restored exactly from evidence, the test text was removed, the clipboard was cleared, and the buffer was never saved; the on-disk file was untouched.
 - All later Notepad tests use a dedicated empty temp file, verify it is empty before typing, and delete the temp file afterward.
+- The extension popup test modified only a user-visible toggle in Adblock Plus, verified each state through UI Automation, restored both toggles to their starting value, and closed the popup. No extension files, profiles, or settings were edited.
+- Desktop input now activates the intended target before a physical click and reports the final cursor position, so a click cannot silently land in another foreground window.
 - No secrets are stored in source, documentation, logs, or Git.

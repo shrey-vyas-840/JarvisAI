@@ -535,6 +535,18 @@ npm run build           PASSED
 
 Stale-session recovery was verified by unit tests, not induced live, to avoid disrupting the user's Chrome/relay session. The extension remains on Playwriter `0.8.0` while the relay is `0.9.0`; this is reported as diagnostics only and does not block JARVIS.
 
+## 2026-11-13 — Phase 5 completion, input fix, and extension popup acceptance
+
+- Confirmed the Phase 5 implementation commit `734e777` exists on `main`, contains the Phase 5 vision/browser work, and is one commit ahead of `origin/main` (`69a2f57`).
+- Reran the full host gate on the committed tree: typecheck, ESLint, Prettier, 35 test files / 245 tests, and build all passed.
+- Extended the desktop sidecar input layer after live acceptance exposed two defects:
+  - pywinauto's absolute mouse helpers passed physical coordinates as normalized coordinates, so `mouseClick` reported success without hitting the target.
+  - `set_focus()` did not activate Chrome extension popups, so physical clicks could be delivered to VS Code or another foreground window.
+  - The sidecar now uses `SetCursorPos` plus explicit mouse events, supports wheel scrolling and drag with the same primitives, reports the final cursor position, and falls back to `SetForegroundWindow` before input.
+- Live extension popup acceptance (Test 5A): opened Adblock Plus `4.51.0` in Profile 4 through the Chrome Extensions menu, inspected its UIA tree, and clicked the checkbox through `DesktopManager.mouseClick`, reading state independently after each click: `[1,1]` initial → `[0,0]` → `[1,1]` → `[0,0]` → `[1,1]`. Restored the starting state and closed the popup.
+- No extension files, profiles, or settings were modified. The audit/PDF report workflow (Test 5) remains blocked because no suitable extension is installed; no extension was installed to force a pass.
+- Updated `PHASE-5-HANDOFF.md`, `STATUS.md`, and `TEST-REPORT.md` with the final Git state, host results, popup evidence, and remaining limitation.
+
 ## Next entry
 
-Phase 5 baseline is live-verified for desktop Tests 1–3 and browser Test 4. Create the Phase 5 milestone commit. Browser Test 5 (extension report workflow) remains blocked until a suitable extension is supplied; do not install one solely to pass a test.
+Phase 5 is complete and committed: `734e777` plus the 2026-11-13 input-fix/documentation commit. Push both commits, then evaluate `vercel-labs/agent-desktop` only if the user requests Phase 6. The extension report workflow remains blocked until the user supplies a suitable extension; do not install one solely to pass a test.

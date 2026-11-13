@@ -21,6 +21,7 @@ sys.stderr.reconfigure(line_buffering=True)
 if sys.platform == "win32":
     try:
         import ctypes
+        import ctypes.wintypes
         # Match UI Automation rectangles and screenshot pixels under Windows DPI scaling.
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -38,7 +39,6 @@ if sys.platform == "win32":
 try:
     from pywinauto import Desktop, Application
     from pywinauto.keyboard import send_keys
-    from pywinauto.mouse import click, double_click, move, press, release, right_click
     from PIL import Image, ImageGrab
 except ImportError as e:
     sys.stderr.write(f"CRITICAL: Failed to import required desktop automation libraries: {e}\n")
@@ -321,9 +321,8 @@ def focus_window(params: Dict[str, Any]) -> Dict[str, Any]:
     target = desktop.window(handle=info["handle"])
     if not target.exists(timeout=2):
         target = Desktop(backend="win32").window(handle=info["handle"])
-    target.set_focus()
     return {
-        "focused": True,
+        "focused": bring_to_foreground(target),
         "handle": info["handle"],
         "title": info["title"]
     }
@@ -401,8 +400,7 @@ def type_text(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"typed": True, "length": 0}
 
     target = resolve_target_window(params)
-    if target is not None:
-        target.set_focus()
+    bring_to_foreground(target)
 
     automation_id = params.get("automation_id")
     control_title = params.get("control_title")
@@ -432,6 +430,64 @@ def press_key(params: Dict[str, Any]) -> Dict[str, Any]:
     send_keys(key)
     return {"pressed": True, "key": key}
 
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_WHEEL = 0x0800
+
+MOUSE_BUTTON_FLAGS = {
+    "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+    "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+    "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+}
+
+def get_cursor_position() -> Tuple[int, int]:
+    point = ctypes.wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    return int(point.x), int(point.y)
+
+def set_cursor_position(x: int, y: int) -> None:
+    if not ctypes.windll.user32.SetCursorPos(int(x), int(y)):
+        raise RuntimeError(f"Failed to move cursor to ({x}, {y}).")
+
+def send_mouse_event(flag: int, data: int = 0) -> None:
+    ctypes.windll.user32.mouse_event(flag, 0, 0, data, 0)
+
+def bring_to_foreground(target) -> bool:
+    if target is None:
+        return False
+    try:
+        target.set_focus()
+    except Exception:
+        pass
+    handle = getattr(target, "handle", None)
+    if not handle:
+        return False
+    user32 = ctypes.windll.user32
+    deadline = time.time() + 1.0
+    while user32.GetForegroundWindow() != handle and time.time() < deadline:
+        try:
+            user32.SetForegroundWindow(handle)
+        except Exception:
+            pass
+        time.sleep(0.05)
+    return user32.GetForegroundWindow() == handle
+
+def click_at(x: int, y: int, button: str = "left", double: bool = False) -> None:
+    down, up = MOUSE_BUTTON_FLAGS.get(button, MOUSE_BUTTON_FLAGS["left"])
+    set_cursor_position(x, y)
+    time.sleep(0.05)
+    presses = 2 if double else 1
+    for index in range(presses):
+        send_mouse_event(down)
+        time.sleep(0.02)
+        send_mouse_event(up)
+        if index + 1 < presses:
+            time.sleep(0.08)
+
 def scroll(params: Dict[str, Any]) -> Dict[str, Any]:
     direction = params.get("direction", "down")
     amount = max(1, int(params.get("amount", 3)))
@@ -441,18 +497,19 @@ def scroll(params: Dict[str, Any]) -> Dict[str, Any]:
     wheel_dist = -amount if direction == "down" else amount
 
     if x is not None and y is not None:
-        ensure_point_on_screen(int(x), int(y))
-        from pywinauto.mouse import scroll as mouse_scroll
-        mouse_scroll(coords=(int(x), int(y)), wheel_dist=wheel_dist)
+        target_x, target_y = int(x), int(y)
+        ensure_point_on_screen(target_x, target_y)
+        set_cursor_position(target_x, target_y)
+        time.sleep(0.05)
+        send_mouse_event(MOUSEEVENTF_WHEEL, wheel_dist * 120)
     elif coords:
         cx, cy = int(coords.get("x", 0)), int(coords.get("y", 0))
         ensure_point_on_screen(cx, cy)
-        from pywinauto.mouse import scroll as mouse_scroll
-        mouse_scroll(coords=(cx, cy), wheel_dist=wheel_dist)
+        set_cursor_position(cx, cy)
+        time.sleep(0.05)
+        send_mouse_event(MOUSEEVENTF_WHEEL, wheel_dist * 120)
     else:
-        target = resolve_target_window(params)
-        if target is not None:
-            target.set_focus()
+        bring_to_foreground(resolve_target_window(params))
         key = "{PGDN}" if direction == "down" else "{PGUP}"
         for _ in range(max(1, amount // 3)):
             send_keys(key)
@@ -484,21 +541,17 @@ def mouse_click(params: Dict[str, Any]) -> Dict[str, Any]:
 
     if target_win is not None and target_win.exists(timeout=2):
         ensure_point_in_window(target_win, x, y)
-        try:
-            target_win.set_focus()
-        except Exception:
-            pass
+        if not bring_to_foreground(target_win):
+            raise RuntimeError(
+                f"Could not bring target window handle={target_win.handle} to the foreground; click cancelled."
+            )
 
-    if double:
-        double_click(coords=(x, y))
-    elif button == "right":
-        right_click(coords=(x, y))
-    else:
-        click(button=button, coords=(x, y))
+    click_at(x, y, button=button, double=double)
     return {
         "clicked": True,
         "x": x,
         "y": y,
+        "cursor": list(get_cursor_position()),
         "target_window": target_win.window_text() if target_win else "unknown"
     }
 
@@ -510,8 +563,8 @@ def mouse_move(params: Dict[str, Any]) -> Dict[str, Any]:
     x = int(x)
     y = int(y)
     ensure_point_on_screen(x, y)
-    move(coords=(x, y))
-    return {"moved": True, "x": x, "y": y}
+    set_cursor_position(x, y)
+    return {"moved": True, "x": x, "y": y, "cursor": list(get_cursor_position())}
 
 def mouse_drag(params: Dict[str, Any]) -> Dict[str, Any]:
     x1, y1 = params.get("x1"), params.get("y1")
@@ -526,16 +579,24 @@ def mouse_drag(params: Dict[str, Any]) -> Dict[str, Any]:
     if target_win is not None and target_win.exists(timeout=2):
         ensure_point_in_window(target_win, x1, y1)
         ensure_point_in_window(target_win, x2, y2)
-        try:
-            target_win.set_focus()
-        except Exception:
-            pass
+        if not bring_to_foreground(target_win):
+            raise RuntimeError(
+                f"Could not bring target window handle={target_win.handle} to the foreground; drag cancelled."
+            )
 
-    move(coords=(x1, y1))
-    press(button="left", coords=(x1, y1))
-    move(coords=(x2, y2))
-    release(button="left", coords=(x2, y2))
-    return {"dragged": True, "from": [x1, y1], "to": [x2, y2]}
+    set_cursor_position(x1, y1)
+    time.sleep(0.05)
+    send_mouse_event(MOUSEEVENTF_LEFTDOWN)
+    time.sleep(0.05)
+    set_cursor_position(x2, y2)
+    time.sleep(0.05)
+    send_mouse_event(MOUSEEVENTF_LEFTUP)
+    return {
+        "dragged": True,
+        "from": [x1, y1],
+        "to": [x2, y2],
+        "cursor": list(get_cursor_position()),
+    }
 
 def capture_screenshot(params: Dict[str, Any]) -> Dict[str, Any]:
     dest_path = params.get("path")

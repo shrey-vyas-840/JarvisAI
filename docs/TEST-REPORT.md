@@ -1,5 +1,51 @@
 # Test Report
 
+## Phase 5 final acceptance — 2026-11-13
+
+Status: **host gate green; desktop Tests 1–3, browser Test 4, and extension popup Test 5A LIVE_VERIFIED; extension report Test 5 blocked by missing target extension**
+
+### Final host gate (committed tree)
+
+```powershell
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build
+```
+
+- `npm run typecheck` (`tsc --noEmit`): passed.
+- `npm run lint` (`eslint .`): passed.
+- `npm run format:check` (`prettier --check .`): passed.
+- `npm test` (`vitest run`): **35 test files, 245 tests passed**; duration 2.44 s.
+- `npm run build` (`tsc -p tsconfig.build.json`): passed.
+- No test files were skipped; no screenshots, secrets, or private artifacts were committed.
+
+### Desktop input reliability fix
+
+Live popup automation exposed two defects that unit tests did not cover:
+
+1. `pywinauto.mouse.click(coords=...)` treated physical screen coordinates as normalized absolute coordinates, so `mouseClick` reported `clicked: true` while leaving the cursor at the wrong position.
+2. `target.set_focus()` did not activate a Chrome extension popup; a physical click could therefore land in VS Code or another foreground window.
+
+The sidecar now positions the cursor with `SetCursorPos`, sends button events at the current cursor, implements wheel scrolling and drag with the same primitives, reports the final cursor position, and retries activation with `SetForegroundWindow` when the target is not foreground. The regression gate above passed after the change.
+
+### Extension popup acceptance — Test 5A — `LIVE_VERIFIED`
+
+- Target: `Adblock Plus - free ad blocker` `4.51.0` (`cfhdojbkjhnklbpkdaibdccddilifddb`), Profile 4, Chrome handle `131750`.
+- Opened the Chrome Extensions menu with JARVIS (`automation_id: view_1006`), then opened the extension popup with JARVIS physical clicks.
+- UI Automation inspection found the Adblock Plus document, `Options` button, links, text, and two checkboxes at `(1676, 217, 58, 41)` and `(1676, 297, 58, 41)`, both initially `toggle_state: 1`.
+- Clicked `(1705, 237)` through `DesktopManager.mouseClick` and independently read the state after each click: `[1,1] → [0,0] → [1,1] → [0,0] → [1,1]` across the diagnosis and final cycle.
+- Restored the starting `[1,1]` state, closed the popup, and verified it was no longer listed.
+- Evidence: `jarvis-toggle-cycle.mts`, `toggle-state.py`, and console JSON under `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\jarvis-phase5\`; not committed.
+- This verifies generic extension popup interaction only. The business-audit/PDF report workflow remains untested because no suitable extension is installed; no extension was installed to force a pass.
+
+### Git state
+
+- Phase 5 implementation: `734e777` (`feat(automation): complete Phase 5 vision and browser reliability`).
+- 2026-11-13 input fix and acceptance documentation: follow-up commit after `734e777`.
+- Working tree clean at handoff; see `git log -1` for the current commit.
+
 ## Phase 5 browser reliability — 2026-11-10
 
 Status: **host gate green; browser live Test 4 LIVE_VERIFIED; Test 5 still blocked by missing target extension**

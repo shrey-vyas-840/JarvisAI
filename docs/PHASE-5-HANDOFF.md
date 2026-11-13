@@ -1,7 +1,7 @@
 # Phase 5 Handoff Record
 
-Status: **implementation complete — host gate green — desktop live tests 1–3 verified — browser live test 4 verified — extension report test 5 blocked by missing target extension**
-Last updated: 2026-11-10 (browser session reliability fix + live acceptance rerun)
+Status: **implementation complete and committed — host gate green — desktop live tests 1–3 verified — browser live test 4 verified — extension popup test 5A verified — extension report test 5 blocked by missing target extension**
+Last updated: 2026-11-13 (desktop mouse reliability fix + extension popup live acceptance)
 
 This document is the durable resume point for Phase 5. Update it after every milestone, live test, or before any long-running operation.
 
@@ -10,43 +10,11 @@ This document is the durable resume point for Phase 5. Update it after every mil
 ## 1. Git state
 
 - Branch: `main`
-- HEAD / `origin/main`: `69a2f57` (`test(automation): record Phase 4 live acceptance results`)
+- Phase 5 implementation commit: `734e777` (`feat(automation): complete Phase 5 vision and browser reliability`)
+- `origin/main` before the Phase 5 push: `69a2f57` (`test(automation): record Phase 4 live acceptance results`)
+- Follow-up desktop input reliability fix and this acceptance record: commit after `734e777` (see `git log -1`).
 - Remote: `https://github.com/shrey-vyas-840/JarvisAI.git`
-- No staged changes and no Phase 5 commit yet.
-- The interrupted Phase 5 session left uncommitted modifications and new files. The browser reliability fix now passes typecheck, lint, format check, 245 tests, and build; desktop live tests 1–3 and browser live test 4 are verified.
-
-### Working-tree summary
-
-```text
- M docs/PHASE-LOG.md
- M docs/STATUS.md
- M docs/TEST-REPORT.md
- M src/browser/browser-manager.ts
- M src/browser/index.ts
- M src/browser/relay-manager.ts
- M src/browser/types.ts
- M src/cli.ts
- M src/config.ts
- M src/core/system-prompt.ts
- M src/desktop/desktop-manager.ts
- M src/tools/browser/index.ts
- M src/tools/desktop/index.ts
- M tests/browser/browser-manager.test.ts
- M tests/browser/relay-manager.test.ts
- M tests/config.test.ts
- M tests/desktop/desktop-tools.test.ts
- M tests/tools/browser/browser-tools.test.ts
- M tools/desktop/sidecar.py
-?? docs/PHASE-5-HANDOFF.md
-?? src/browser/errors.ts
-?? src/browser/extension-discovery.ts
-?? src/browser/png-dimensions.ts
-?? src/vision/
-?? tests/browser/browser-manager-connection.test.ts
-?? tests/browser/extension-discovery.test.ts
-?? tests/browser/png-dimensions.test.ts
-?? tests/vision/
-```
+- No staged or uncommitted changes after the Phase 5 milestone commit. The host gate and live acceptance results in this document are from the committed tree.
 
 ---
 
@@ -102,38 +70,40 @@ Legend: `LIVE_VERIFIED`, `IMPLEMENTED_AND_UNIT_TESTED`, `IMPLEMENTED_BUT_NOT_LIV
 | Desktop window inspection/enumeration/focus           | sidecar, `DesktopManager`, tools                                                           | mocked; live                                                                                                    | `LIVE_VERIFIED`                                                    | Preserve                                                                        |
 | Desktop get controls                                  | sidecar `get_controls`, tool                                                               | mocked; live Notepad/UIA                                                                                        | `LIVE_VERIFIED`                                                    | Preserve                                                                        |
 | Desktop typing / key press                            | sidecar, tools                                                                             | mocked; live typing and shortcuts                                                                               | `LIVE_VERIFIED`                                                    | Preserve                                                                        |
-| Desktop click / double / right / move / scroll / drag | sidecar, tools                                                                             | mocked; live single left click                                                                                  | `LIVE_VERIFIED` for left click; other buttons not live-tested      | Test only if needed                                                             |
+| Desktop click / double / right / move / scroll / drag | sidecar, tools                                                                             | mocked; live single left click and extension checkbox toggles                                                   | `LIVE_VERIFIED` for left click; other buttons not live-tested      | Test only if needed                                                             |
 | Wait for window/state                                 | sidecar `wait_for_window`, tool                                                            | mocked; live Notepad wait                                                                                       | `LIVE_VERIFIED`                                                    | Preserve                                                                        |
 | Vision-guided desktop action                          | `desktop_vision_locate`, `desktop_vision_click`                                            | unit + live Notepad menu click                                                                                  | `LIVE_VERIFIED`                                                    | Preserve; never auto-repeat clicks                                              |
 | Vision-guided browser action                          | `browser_vision_locate`, `browser_vision_click`                                            | registration/unit + live Wikipedia Test 4                                                                       | `LIVE_VERIFIED`; viewport fallback + safe post-click title read    | Preserve                                                                        |
 | Browser relay/session readiness                       | `relay-manager.ts`, `browser-manager.ts`, `errors.ts`                                      | `tests/browser/relay-manager.test.ts` (6), `browser-manager-connection.test.ts` (10), `browser-manager.test.ts` | `LIVE_VERIFIED` (status, readiness, tabs, navigate, new/close tab) | Preserve; do not treat an open relay port as a ready session                    |
 | Chrome extension discovery                            | `extension-discovery.ts`, CLI, tool                                                        | `tests/browser/extension-discovery.test.ts` (3)                                                                 | `IMPLEMENTED_AND_UNIT_TESTED`; live CLI read 34 extensions         | Preserve                                                                        |
-| Extension popup interaction                           | composable desktop tools only; no dedicated abstraction                                    | none                                                                                                            | `PARTIALLY_IMPLEMENTED`                                            | Build a tested popup flow only when a target extension is known                 |
+| Extension popup interaction                           | composable desktop tools only; no dedicated abstraction                                    | live Adblock Plus popup: open, inspect, toggle, restore, close                                                  | `LIVE_VERIFIED` with Adblock Plus; no dedicated abstraction        | Reuse the UIA + physical-click sequence for another extension when needed       |
 | Extension report workflow (GBP audit/PDF)             | none                                                                                       | none                                                                                                            | `BLOCKED_BY_MANUAL_ACTION`                                         | Requires an installed audit/report extension; do not install one to pass a test |
 | Observe–Act–Verify orchestration                      | AgentLoop + system prompt; vision click re-observes                                        | agent-loop tests; live Notepad menu + browser nav                                                               | `LIVE_VERIFIED` for vision-click flows                             | Preserve                                                                        |
 | Safe bounded retries                                  | AgentLoop limits + repeated-call detection; vision click never auto-retries                | agent-loop tests                                                                                                | `IMPLEMENTED_AND_UNIT_TESTED`                                      | Preserve                                                                        |
 | AgentLoop integration                                 | all tools registered in `runAgentCommand`                                                  | existing tests                                                                                                  | `IMPLEMENTED_AND_UNIT_TESTED`                                      | Optional live AgentLoop browser run; tools already live-verified directly       |
 | Execution receipts                                    | `ToolRegistry` receipts                                                                    | existing tests                                                                                                  | `IMPLEMENTED`; new tools do not add a `verify` hook                | Preserve                                                                        |
 | Security / approvals                                  | password block, URL guard, approvals, relay loopback                                       | existing tests                                                                                                  | `IMPLEMENTED_AND_UNIT_TESTED`                                      | Regression test                                                                 |
-| Documentation                                         | this file, `STATUS.md`, `PHASE-LOG.md`, `TEST-REPORT.md`                                   | —                                                                                                               | `IN_PROGRESS`                                                      | Keep updated through milestones                                                 |
+| Documentation                                         | this file, `STATUS.md`, `PHASE-LOG.md`, `TEST-REPORT.md`                                   | —                                                                                                               | `COMPLETE` for Phase 5 at this milestone                           | Keep updated through milestones                                                 |
 
 ---
 
-## 4. Host verification (2026-11-10)
+## 4. Host verification (2026-11-13)
 
 ```text
 npm run typecheck    PASSED
 npm run lint         PASSED
 npm run format:check PASSED
-npm test             35 test files passed, 245 tests passed (2.91 s)
+npm test             35 test files passed, 245 tests passed (2.44 s)
 npm run build        PASSED
 ```
 
-The lint and Prettier failures from the interrupted session were fixed. The sidecar `mouse_click` double-click branch was also repaired: `pywinauto 0.6.9` does not accept a `double` keyword, so the sidecar now calls `double_click()` for double clicks and `right_click()` for right clicks.
+The lint and Prettier failures from the interrupted session were fixed. An earlier repair replaced the `mouse_click` double-click branch because `pywinauto 0.6.9` does not accept a `double` keyword; the 2026-11-13 fix below supersedes the pywinauto mouse helpers entirely.
+
+The 2026-11-13 acceptance rerun found a second input defect: `pywinauto.mouse.click(coords=...)` passed physical screen coordinates as absolute normalized coordinates, which moved the cursor to the wrong place, and `set_focus()` did not activate Chrome extension popups. The sidecar now positions the cursor with `SetCursorPos`, sends button events at the current cursor, scrolls with `MOUSEEVENTF_WHEEL`, and falls back to `SetForegroundWindow` when a target does not become foreground. A background target is activated before any physical click so input cannot land in an unrelated foreground window.
 
 ---
 
-## 5. Live verification performed (2026-11-09)
+## 5. Live verification performed (2026-11-09 through 2026-11-13)
 
 Evidence is in `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\jarvis-phase5\`.
 
@@ -186,9 +156,19 @@ readiness again     READY in 187 ms
 
 Stale-session recovery is covered by unit tests (first navigation rejects with a closed-target error, JARVIS reconnects once, then navigation succeeds). It was not induced against the live browser because that would require disrupting the user's Chrome/relay session.
 
+### Test 5A — Extension popup interaction — `LIVE_VERIFIED` (2026-11-13)
+
+Target: installed `Adblock Plus - free ad blocker` `4.51.0` (`cfhdojbkjhnklbpkdaibdccddilifddb`) in Profile 4 (Chrome handle `131750`). No extension files, settings, or profiles were modified.
+
+- Opened the Chrome `Extensions` menu through the toolbar control (`automation_id: view_1006`), then opened the Adblock Plus popup with JARVIS physical mouse clicks.
+- Inspected the popup through UI Automation: `Adblock Plus` document, `Options` button (`options`), comparison links, two checkboxes, and the page/global text. Both checkboxes started at `toggle_state: 1`.
+- Found and fixed the desktop input defect described in Section 4, leaving both toggles at `[0, 0]`. Then drove the checkbox at screen `(1705, 237)` through `DesktopManager.mouseClick` in a three-click cycle: `[0, 0] → [1, 1] → [0, 0] → [1, 1]`. Each state was read back independently after the click.
+- The final state was restored to the starting `[1, 1]`, the popup was closed, and no extension setting was left changed.
+- Evidence: console JSON from `jarvis-toggle-cycle.mts` plus `toggle-state.py` under `C:\Users\SHREYV~1\AppData\Local\Temp\opencode\jarvis-phase5\`; no screenshots or private artifacts were committed.
+
 ### Test 5 — Extension report workflow — `BLOCKED_BY_MANUAL_ACTION`
 
-- No suitable business-audit/PDF-report extension is installed in the inspected profiles (4/5/9/10/11/12). The extension report workflow cannot be tested without the user identifying or installing one. Do not install an extension just to pass a test.
+- No suitable business-audit/PDF-report extension is installed in the inspected profiles (4/5/9/10/11/12). The extension report workflow cannot be tested without the user identifying or installing one. Do not install an extension just to pass a test. Test 5A verifies generic popup interaction, not a report workflow.
 - Note: the Playwriter extension reports `playwriterVersion: 0.8.0` while the relay/package is `0.9.0`. JARVIS now treats this as diagnostic metadata only and does not block on it.
 
 ---
@@ -215,7 +195,7 @@ Undo/redo did not restore the buffer (`Ctrl+Z` undid a large paste; `Ctrl+Y` had
 5. Vision rectangles must fit fully inside the captured image after normalization; partially clipped elements are dropped, not clamped.
 6. `desktop_get_controls` can return deep UIA trees and hit timeouts on complex apps; use `limit` and window-scoped inspection.
 7. The extension may report an older `playwriterVersion` than the relay (`0.8.0` vs `0.9.0` here). This is surfaced as diagnostics only; update the extension through Chrome when convenient, but JARVIS no longer depends on the versions matching.
-8. Extension popup automation has no dedicated abstraction; the desktop tools can compose it, but there is no tested target extension.
+8. Extension popup automation has no dedicated abstraction. The composable desktop tools were live-verified against Adblock Plus (Test 5A), but each new extension may expose different UIA control names; inspect before clicking and verify state after every action.
 9. A requested profile that is not connected now fails with `no-matching-browser` instead of silently falling back to another profile.
 
 ---
@@ -230,10 +210,10 @@ Undo/redo did not restore the buffer (`Ctrl+Z` undid a large paste; `Ctrl+Y` had
 
 ## 9. Next steps
 
-1. Create the Phase 5 milestone commit (source/docs/tests only; no screenshots, secrets, or private artifacts).
-2. Update `STATUS.md`, `PHASE-LOG.md`, and `TEST-REPORT.md` with the 2026-11-10 browser reliability results (done in the same working tree as this handoff).
-3. Optionally run Test 5 (extension popup/report workflow) if the user supplies a suitable extension.
-4. Only after the Phase 5 baseline commit, evaluate `vercel-labs/agent-desktop` through the smallest safe adapter and benchmark latency/token usage.
+1. Phase 5 implementation is committed in `734e777`; the 2026-11-13 input fix and documentation land in the follow-up commit.
+2. `STATUS.md`, `PHASE-LOG.md`, and `TEST-REPORT.md` are updated with the 2026-11-13 host gate, extension popup acceptance, and remaining blocker.
+3. Optionally run the extension report workflow (Test 5) only if the user supplies or identifies a suitable audit/report extension. Do not install one solely to pass a test.
+4. Only after Phase 5 is pushed, evaluate `vercel-labs/agent-desktop` through the smallest safe adapter and benchmark latency/token usage.
 
 ### Resume commands
 
