@@ -21,6 +21,7 @@ import { OllamaClient } from './llm/ollama-client.js';
 import { Logger } from './logging/logger.js';
 import { CliApprovalProvider } from './security/cli-approval-provider.js';
 import { createBrowserTools } from './tools/browser/index.js';
+import { createAgentDesktopTools } from './tools/desktop/agent-desktop-tools.js';
 import { createDesktopTools } from './tools/desktop/index.js';
 import { createExportTools } from './tools/export/index.js';
 import { createFilesystemTools } from './tools/filesystem/index.js';
@@ -560,6 +561,7 @@ export async function runDefaultAgent(
     numCtx: config.ollama.numCtx,
   });
   const registry = new ToolRegistry({ approvalProvider: new CliApprovalProvider() });
+  const desktopManager = new DesktopManager();
 
   const tools = [
     createGetJarvisStatusTool(config),
@@ -568,7 +570,8 @@ export async function runDefaultAgent(
     ...createResearchTools(),
     ...createGeoTools(),
     ...createExportTools({ config }),
-    ...createDesktopTools({ config }),
+    ...createDesktopTools({ config, desktopManager }),
+    ...createAgentDesktopTools({ desktopManager }),
   ];
 
   for (const tool of tools) {
