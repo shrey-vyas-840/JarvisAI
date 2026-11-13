@@ -2,11 +2,12 @@
 
 ## 2026-11-14 — Phase 6 recovery and readiness
 
-- Repaired all current lint and format failures, the Windows desktop CLI test fixture, and orchestration stale-reference/state handling. The CLI’s three reported unsafe-call diagnostics were stale: fresh targeted ESLint showed zero errors.
+- Repaired CLI/full-project lint and formatting failures, the Windows desktop CLI test fixture, and orchestration stale-reference/state handling. Fresh CLI ESLint reports zero errors at the three `browser.dispose()` calls. VS Code still reports three `no-unsafe-call` diagnostics; its Output channel and extension project/configuration could not be inspected, so the editor-side cause remains unresolved. Do not label the findings stale.
 - Verification: typecheck PASS; full lint PASS; format check PASS; 41 test files / 297 tests PASS; build PASS; targeted CLI ESLint PASS.
 - Orchestrator tests confirm safe fresh-snapshot/re-resolution after an explicitly not-delivered stale Agent Desktop reference, terminal FAILED state after exhaustion, blocked dependent steps, and no retry when action delivery is uncertain.
 - Live checks: Ollama/Qwen model available, Playwriter 0.9.0 relay and Chrome extension READY, vision capability advertised. Agent Desktop is blocked by foreign-principal state ownership and `EnumWindows` failure. pywinauto is blocked by absent global Python and a broken venv pointing to a missing Python 3.12 path.
 - Multi-application acceptance was not started because no desktop backend is live-ready. No remote README, Maps, or Gemini action was claimed.
+- Final repository checkpoint at inspection: `f204ea19cdfd28b9c76e9864dfce90ffc3f05199`; clean working tree; six commits ahead of stored `origin/main`; no fetch/push.
 - See `PHASE-6-READINESS.md` and the latest checkpoint in `PHASE-6-HANDOFF.md`.
 
 ## 2026-11-07 — Phase 0 complete

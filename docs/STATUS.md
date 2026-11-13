@@ -2,14 +2,14 @@
 
 ## 2026-11-14 Phase 6 recovery update
 
-- Full quality gate is green on the current working tree: typecheck, full ESLint, Prettier check, build, and 297 tests across 41 files pass. `npx eslint src/cli.ts --no-cache` reports no errors. The prior IDE CLI warnings were stale relative to fresh ESLint output.
+- Full quality gate passed at HEAD `f204ea19cdfd28b9c76e9864dfce90ffc3f05199`: typecheck, full ESLint, Prettier check, build, and 297 tests across 41 files. `npx eslint src/cli.ts --no-cache` reports no errors. VS Code still reports three `no-unsafe-call` diagnostics at `browser.dispose()`; this session could not inspect the ESLint Output channel or extension configuration, so the editor findings remain unresolved and are not described as stale.
 - Full lint failures were rooted in the root-level `milestone3-demo.ts` not being part of the TypeScript project service, existing orchestration lint issues, and test typing. ESLint now explicitly permits the real demo as a default-project file; the demo and orchestration/test issues are corrected without weakening strict TypeScript rules.
 - The previous desktop CLI test failure was caused by spawning the real desktop sidecar in the test. The CLI now accepts an injected desktop manager and the test uses a fixture; production behavior remains unchanged.
 - Orchestration now refreshes accessibility snapshot and uniquely resolves a target after a safely undelivered stale `snapshot_id` error. Exhausted steps become FAILED, dependent steps are SKIPPED, plan state is terminal, and uncertain action delivery is not retried. Focused tests cover stale-reference recovery and uncertain delivery.
 - Live browser readiness passed against the existing external Playwriter 0.9.0 relay at `127.0.0.1:19988`, with one connected extension and one responsive tab. No Chrome or relay process was restarted or stopped.
 - Current desktop readiness is BLOCKED. Agent Desktop state access failed because the state file is owned by another Windows principal; selector probing also failed at `EnumWindows`. pywinauto is unavailable because global Python is absent and the project venv references a missing Python 3.12 installation. The backend selector selected no desktop backend.
 - Because the desktop backend gate is not satisfied, the GitHub README, Google Maps, and Gemini image acceptance workflow was not started. See [PHASE-6-READINESS.md](PHASE-6-READINESS.md) for capability evidence and remaining work.
-- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; recovery implementation committed locally as `a353241`. The documentation checkpoint follows in a separate local commit. No push was performed.
+- Implementation commit: `a353241`; final checkpoint at inspection: `f204ea19cdfd28b9c76e9864dfce90ffc3f05199`; branch `main`, clean, six commits ahead of recorded `origin/main`. No remote operation was performed in this check.
 
 Last updated: 2026-11-13
 

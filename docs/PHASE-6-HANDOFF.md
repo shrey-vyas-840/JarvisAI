@@ -1,13 +1,19 @@
 # Phase 6 Handoff - Milestone 3 Complete
 
+## Current repository/editor checkpoint — 2026-11-14
+
+- Final repository commit at inspection: `f204ea19cdfd28b9c76e9864dfce90ffc3f05199` on `main`; working tree clean; six commits ahead of the stored `origin/main`. No remote operation was run.
+- VS Code continues to report three `no-unsafe-call` diagnostics at `await browser.dispose()` in `src/cli.ts`. Fresh CLI ESLint reports no findings. `browser` is a `BrowserManager`, whose `dispose()` is declared `async` and returns `Promise<void>`. The ESLint Output channel, extension library/config/project, and saved-buffer state could not be inspected; therefore the editor-side cause is unknown and the diagnostics are unresolved. Do not describe them as stale. No ESLint server restart was done without first capturing its current logs.
+- Runtime probes: Ollama/Qwen and browser readiness passed. Agent Desktop and pywinauto failed live capability probes; selector returned `null`. No desktop, navigation, AgentLoop, orchestration live acceptance, or GitHub/Maps/Gemini workflow was attempted.
+
 ## 2026-11-14 recovery checkpoint
 
-- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; recovery implementation commit: `a353241` (`fix: recover phase 6 quality and orchestration`). Branch `main`. At baseline it was four commits ahead of the locally recorded `origin/main` tracking reference (`4 0`). No fetch or push was performed. The pre-existing unstaged BackendRouter modification was inspected and preserved; it is included with this recovery’s intentional BackendRouter corrections.
+- Starting commit: `87f6b229fe67ed2bb7e213f50e5ab7e6c70234c5`; implementation commit: `a353241`; final recovery documentation checkpoint: `f204ea19cdfd28b9c76e9864dfce90ffc3f05199`. It was four commits ahead of the stored remote reference at baseline and six at this check. No fetch or push was performed. The pre-existing BackendRouter change was inspected and preserved.
 - Quality gate: `npm run typecheck`, `npm run lint`, `npm run format:check`, `npm test` (41 files / 297 tests), `npm run build`, and `npx eslint src/cli.ts --no-cache` all pass.
 - Orchestrator stale snapshot recovery uses a fresh snapshot and unique target lookup only after a failed action receipt explicitly says `delivery=not_delivered` and `retry=safe`. Uncertain action delivery is not retried. Exhausted steps are FAILED, dependent steps SKIPPED, and plan state reaches FAILED or PARTIALLY_COMPLETED.
 - Live: Ollama/Qwen is available; external Playwriter 0.9.0 relay, extension, and responsive tab pass browser readiness. Agent Desktop is blocked by foreign-principal state ownership and a selector `EnumWindows` failure. pywinauto is blocked by missing Python and a venv referring to a removed Python 3.12 installation. No browser/relay process was restarted or stopped.
 - The full workflow is gated: no desktop backend is live-ready, so no GitHub README update, Google Maps navigation, Gemini prompt, download, or image opening was attempted. Capability-by-capability evidence is in `PHASE-6-READINESS.md`.
-- Recovery changes are committed as `a353241`; the documentation checkpoint itself is being recorded in the follow-up commit. The expected final working tree is clean. Do not push without a separate request.
+- Recovery changes are committed through `f204ea19cdfd28b9c76e9864dfce90ffc3f05199`; the tree was clean at inspection. No push was performed.
 
 **Date**: 2026-11-13
 **Commit**: (pending)

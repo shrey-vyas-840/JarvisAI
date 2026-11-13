@@ -11,7 +11,7 @@
 | `npm run build`                    | PASS                              |
 | `npx eslint src/cli.ts --no-cache` | PASS, zero diagnostics            |
 
-The reported three CLI `no-unsafe-call` Problems-panel diagnostics were not present in fresh ESLint output. The full lint gate’s previous failures were fixed, including ESLint project-service configuration for the existing root-level demo. The desktop CLI test now injects a fixture instead of requiring an available Windows desktop sidecar; no test was skipped. Orchestration coverage now includes stale accessibility reference recovery, retry exhaustion and dependent-step blocking, and uncertain action delivery.
+Fresh CLI ESLint has zero diagnostics, but VS Code continues to report three `no-unsafe-call` findings at `await browser.dispose()` in `src/cli.ts`. The `BrowserManager.dispose()` declaration returns `Promise<void>`. The VS Code Output channel, extension library/config/project, and saved-buffer state could not be inspected; the editor discrepancy is unresolved and is not called stale. The full lint gate’s previous failures were fixed, including ESLint project-service configuration for the root-level demo. The desktop CLI test injects a fixture instead of requiring a live sidecar; no test was skipped. Orchestration coverage includes stale accessibility reference recovery, retry exhaustion and dependent-step blocking, and uncertain action delivery.
 
 Live runtime evidence is recorded separately in `PHASE-6-READINESS.md`. Browser readiness and Ollama availability passed; desktop backends are blocked in this environment, so the multi-application acceptance workflow was not attempted.
 
