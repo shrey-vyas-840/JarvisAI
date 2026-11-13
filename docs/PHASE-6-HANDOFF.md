@@ -4,6 +4,10 @@
 **Commit**: (pending)
 **Milestone**: 3 - End-to-End Demo with AgentLoop (Ollama Qwen3.5 9B)
 
+## TypeScript recovery update (2026-11-13)
+
+The recovery pass fixed the compile errors in the browser/relay/CLI changes without changing the Agent Desktop or orchestration implementation. `npm run typecheck` and `npm run build` now pass. Targeted lint passes for browser, logging, CLI, and the new Playwriter process-manager test. Full lint/format/test gates still have unrelated orchestration lint/style errors, a missing ESLint input (`milestone3-demo.ts`), and one desktop-windows test failure; see `issue.md` and `docs/TEST-REPORT.md`. Runtime confirmed the external Playwriter relay and Chrome session remain active; the stop command did not terminate them. Agent Desktop was unavailable during this runtime check.
+
 ## Summary
 Completed Milestone 3 of Phase 6: demonstrated the JARVIS orchestration capabilities with the actual AgentLoop using local Ollama Qwen3.5 9B. The demo exercises desktop automation, orchestration state machine, backend selection, verification, and retry logic.
 

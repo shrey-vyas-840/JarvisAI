@@ -760,3 +760,17 @@ git status --short --branch
 
 - npm 11.16.0 emitted an `allow-scripts` warning for `esbuild@0.28.2` (postinstall not covered). The binary was present and loadable, and Vitest ran successfully in Phase 1B.
 - No Git commit was created.
+
+# 2026-11-13 — TypeScript recovery verification
+
+| Gate                                                                               | Result                                                                                      |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `npm run typecheck`                                                                | PASS, zero TypeScript diagnostics                                                           |
+| `npm run build`                                                                    | PASS                                                                                        |
+| Targeted ESLint (`src/cli.ts`, `src/browser`, `src/logging`, process-manager test) | PASS                                                                                        |
+| `npm run lint`                                                                     | FAIL, 68 existing lint errors in orchestration files/tests and missing `milestone3-demo.ts` |
+| `npm run format:check`                                                             | FAIL, 10 existing documentation/orchestration files                                         |
+| `npm test`                                                                         | 40/41 files, 294/295 tests; only `tests/cli.test.ts` desktop windows command fails          |
+| Focused relay/process/CLI tests                                                    | 18/19 pass; relay manager and process-manager tests pass                                    |
+
+Runtime checks on built output: `--help` and `--version` passed. `status` reported Ollama READY, Agent Desktop NOT READY, external Playwriter 0.9.0, one connected extension, and browser READY. `start` reused that external relay and reported JARVIS NOT READY because Agent Desktop was unavailable. `stop` reported no JARVIS-owned relay and left the external relay running. `browser status` remained healthy.

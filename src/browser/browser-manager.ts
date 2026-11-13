@@ -20,7 +20,8 @@ import type {
   BrowserTabInfo,
   ConnectedProfileInfo,
   RelayStatus,
-} from './types.js';
+} from '../browser/types.js';
+import { NOOP_LOGGER, type LoggerLike } from '../logging/logger.js';
 
 export const JARVIS_TAB_GROUP_NAME = 'jarvis';
 
@@ -41,6 +42,7 @@ export interface BrowserManagerOptions {
   readonly defaultTimeoutMs?: number;
   readonly pageTitleTimeoutMs?: number;
   readonly relayReadyTimeoutMs?: number;
+  readonly logger?: LoggerLike;
 }
 
 export class BrowserManager {
@@ -59,7 +61,11 @@ export class BrowserManager {
   private recoveryAttempts = 0;
 
   public constructor(options: BrowserManagerOptions = {}) {
-    this.relayManager = new RelayManager({ port: options.relayPort });
+    const logger = options.logger ?? NOOP_LOGGER;
+    this.relayManager = new RelayManager({
+      port: options.relayPort,
+      logger,
+    });
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 30000;
     this.pageTitleTimeoutMs = options.pageTitleTimeoutMs ?? DEFAULT_PAGE_TITLE_TIMEOUT_MS;
     this.relayReadyTimeoutMs = options.relayReadyTimeoutMs ?? DEFAULT_RELAY_READY_TIMEOUT_MS;
@@ -87,6 +93,28 @@ export class BrowserManager {
 
   public async listConnectedProfiles(): Promise<ExtensionBrowser[]> {
     return listBrowsers({ port: this.relayManager.port });
+  }
+
+  public async ensureRelayRunning(): Promise<RelayStatus> {
+    return this.relayManager.ensureRunning();
+  }
+
+  public async getRelayProcessStatus(): Promise<
+    import('./playwriter-process-manager.js').ProcessManagerStatus
+  > {
+    return this.relayManager.getProcessManagerStatus();
+  }
+
+  public async startRelay(): Promise<RelayStatus> {
+    return this.relayManager.start();
+  }
+
+  public async stopRelay(): Promise<void> {
+    return this.relayManager.stop();
+  }
+
+  public async restartRelay(): Promise<RelayStatus> {
+    return this.relayManager.restart();
   }
 
   public async connect(targetProfileEmailOrId?: string): Promise<ConnectedProfileInfo> {
@@ -649,6 +677,11 @@ export class BrowserManager {
 
   private recordError(error: unknown): void {
     this.lastError = errorMessage(error);
+  }
+
+  public async dispose(): Promise<void> {
+    await this.closeConnection();
+    await this.relayManager.stop();
   }
 }
 

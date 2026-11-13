@@ -549,4 +549,14 @@ Stale-session recovery was verified by unit tests, not induced live, to avoid di
 
 ## Next entry
 
+## 2026-11-13 — TypeScript recovery and compile fixes
+
+- Corrected the new `RelayStatus` return annotations to use the type definition from `src/browser/types.ts`; restored that module in the browser barrel exports.
+- Aligned BrowserManager, RelayManager, and PlaywriterProcessManager on `LoggerLike`; added a typed no-op logger.
+- Fixed spawn stdio descriptors to use numeric file descriptors and added parent descriptor cleanup. Added a process-manager test confirming external relay listeners are reused and not stopped.
+- Corrected unknown Ollama response handling, removed nonexistent scale metadata from screen mapping, and fixed unused CLI/relay declarations.
+- Verification: typecheck/build and targeted lint pass; 294 of 295 tests pass. Full lint reports 68 errors and full format check reports 10 files, mostly Phase 6 orchestration; the desktop-windows test fails in the current environment. Runtime help/version/browser status pass, and external relay ownership was preserved.
+
+## Next entry
+
 Phase 5 is complete and committed: `734e777` plus the 2026-11-13 input-fix/documentation commit. Push both commits, then evaluate `vercel-labs/agent-desktop` only if the user requests Phase 6. The extension report workflow remains blocked until the user supplies a suitable extension; do not install one solely to pass a test.

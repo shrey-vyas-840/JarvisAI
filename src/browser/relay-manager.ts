@@ -1,29 +1,28 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
-import net from 'node:net';
 
 import { BrowserError, errorMessage } from './errors.js';
+import { PlaywriterProcessManager } from './playwriter-process-manager.js';
 import type { ConnectedProfileInfo, RelayStatus } from './types.js';
+import { NOOP_LOGGER, type LoggerLike } from '../logging/logger.js';
 
 export const DEFAULT_RELAY_HOST = '127.0.0.1';
 export const DEFAULT_RELAY_PORT = 19988;
-
-const PROBE_TIMEOUT_MS = 600;
 
 export interface RelayManagerOptions {
   readonly host?: string | undefined;
   readonly port?: number | undefined;
   readonly startupTimeoutMs?: number | undefined;
+  readonly logger?: LoggerLike;
+  readonly logDir?: string;
+  readonly pidFilePath?: string;
 }
 
 export class RelayManager {
   public readonly host: string;
   public readonly port: number;
-  private readonly startupTimeoutMs: number;
-  private spawnedProcess: ChildProcess | null = null;
+  private readonly processManager: PlaywriterProcessManager;
 
   public constructor(options: RelayManagerOptions = {}) {
-    // Strictly enforce loopback
     if (
       options.host !== undefined &&
       options.host !== '127.0.0.1' &&
@@ -36,10 +35,31 @@ export class RelayManager {
 
     this.host = DEFAULT_RELAY_HOST;
     this.port = options.port ?? DEFAULT_RELAY_PORT;
-    this.startupTimeoutMs = options.startupTimeoutMs ?? 8000;
+    this.processManager = new PlaywriterProcessManager({
+      host: this.host,
+      port: this.port,
+      startupTimeoutMs: options.startupTimeoutMs ?? 15_000,
+      logger: options.logger ?? NOOP_LOGGER,
+      ...(options.logDir === undefined ? {} : { logDir: options.logDir }),
+      ...(options.pidFilePath === undefined ? {} : { pidFilePath: options.pidFilePath }),
+    });
   }
 
   public async getStatus(): Promise<RelayStatus> {
+    const pmStatus = await this.processManager.getStatus();
+
+    if (!pmStatus.listening) {
+      return {
+        running: false,
+        listening: false,
+        host: this.host,
+        port: this.port,
+        version: null,
+        connectedExtensions: null,
+        extensionStatusError: 'Relay is not listening on the configured loopback port.',
+      };
+    }
+
     let version: string | null;
     try {
       const payload = await this.fetchJson<{ version?: unknown } | string>('/version');
@@ -50,17 +70,14 @@ export class RelayManager {
             ? payload.version
             : null;
     } catch (error) {
-      const listening = await this.probeListening();
       return {
         running: false,
-        listening,
+        listening: true,
         host: this.host,
         port: this.port,
         version: null,
         connectedExtensions: null,
-        extensionStatusError: listening
-          ? `Relay HTTP API is not ready: ${errorMessage(error)}`
-          : 'Relay is not listening on the configured loopback port.',
+        extensionStatusError: `Relay HTTP API is not ready: ${errorMessage(error)}`,
       };
     }
 
@@ -122,52 +139,70 @@ export class RelayManager {
     return profiles;
   }
 
-  public async start(): Promise<RelayStatus> {
-    const initialStatus = await this.getStatus();
-    if (initialStatus.running) {
-      return initialStatus;
+  public async ensureRunning(): Promise<RelayStatus> {
+    const pmStatus = await this.processManager.ensureRunning();
+    if (!pmStatus.listening) {
+      throw new Error(`Playwriter relay failed to start on ${this.host}:${String(this.port)}`);
     }
 
-    // Spawn relay using the safe command: playwriter serve --host 127.0.0.1
-    // On Windows, playwriter is installed globally as playwriter.cmd
-    const cmd = process.platform === 'win32' ? 'playwriter.cmd' : 'playwriter';
-    const args = ['serve', '--host', '127.0.0.1'];
-
-    try {
-      this.spawnedProcess = spawn(cmd, args, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      this.spawnedProcess.unref();
-    } catch (spawnError) {
-      const message = spawnError instanceof Error ? spawnError.message : 'Unknown spawn error';
-      throw new Error(`Failed to spawn Playwriter relay: ${message}`, { cause: spawnError });
-    }
-
-    const startTime = Date.now();
-    while (Date.now() - startTime < this.startupTimeoutMs) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const status = await this.getStatus();
-      if (status.running) {
-        return status;
+    // Wait for HTTP API to be ready
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      try {
+        await this.fetchJson<unknown>('/version');
+        return await this.getStatus();
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
 
+    const status = await this.getStatus();
+    if (!status.running) {
+      throw new Error(
+        `Playwriter HTTP API did not become ready within 15000ms at ${this.host}:${String(this.port)}`,
+      );
+    }
+    return status;
+  }
+
+  public async start(): Promise<RelayStatus> {
+    const pmStatus = await this.processManager.start();
+    if (!pmStatus.listening) {
+      throw new Error(`Playwriter relay failed to start on ${this.host}:${String(this.port)}`);
+    }
+
+    // Wait for HTTP API to be ready
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      try {
+        await this.fetchJson<unknown>('/version');
+        return await this.getStatus();
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
     throw new Error(
-      `Playwriter relay did not start within ${String(this.startupTimeoutMs)}ms at ${this.host}:${String(this.port)}. Please ensure 'playwriter serve --host 127.0.0.1' can run locally.`,
+      `Playwriter HTTP API did not become ready within 15000ms at ${this.host}:${String(this.port)}`,
     );
   }
 
-  public stop(): void {
-    if (this.spawnedProcess && !this.spawnedProcess.killed) {
-      try {
-        this.spawnedProcess.kill();
-      } catch {
-        // Ignored
-      }
-      this.spawnedProcess = null;
-    }
+  public async stop(): Promise<void> {
+    await this.processManager.stop();
+  }
+
+  public async restart(): Promise<RelayStatus> {
+    await this.processManager.restart();
+    return this.getStatus();
+  }
+
+  public getProcessManager(): PlaywriterProcessManager {
+    return this.processManager;
+  }
+
+  public getProcessManagerStatus(): Promise<
+    import('./playwriter-process-manager.js').ProcessManagerStatus
+  > {
+    return this.processManager.getStatus();
   }
 
   private async listSingleConnectedExtension(cause: unknown): Promise<ConnectedProfileInfo[]> {
@@ -185,31 +220,6 @@ export class RelayManager {
         { cause },
       );
     }
-  }
-
-  private probeListening(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
-    return new Promise((resolve) => {
-      const socket = net.connect({ host: this.host, port: this.port });
-      let settled = false;
-
-      const finish = (value: boolean): void => {
-        if (settled) return;
-        settled = true;
-        socket.destroy();
-        resolve(value);
-      };
-
-      socket.setTimeout(timeoutMs);
-      socket.once('connect', () => {
-        finish(true);
-      });
-      socket.once('timeout', () => {
-        finish(false);
-      });
-      socket.once('error', () => {
-        finish(false);
-      });
-    });
   }
 
   private fetchJson<T>(urlPath: string): Promise<T> {
@@ -238,7 +248,6 @@ export class RelayManager {
               const parsed: unknown = JSON.parse(data);
               resolve(parsed as T);
             } catch {
-              // Might be plain text version string
               resolve(data.trim() as unknown as T);
             }
           });
@@ -255,10 +264,6 @@ export class RelayManager {
       });
     });
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function normalizeExtension(value: unknown): ConnectedProfileInfo | null {
@@ -280,4 +285,8 @@ function normalizeExtension(value: unknown): ConnectedProfileInfo | null {
     activeTabs: typeof value.activeTargets === 'number' ? value.activeTargets : 0,
     playwriterVersion: typeof value.playwriterVersion === 'string' ? value.playwriterVersion : null,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

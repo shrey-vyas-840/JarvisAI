@@ -56,6 +56,9 @@ Usage:
 Commands:
   version               Print the JARVIS version
   health                Run read-only environment health checks
+  start                 Start JARVIS: check dependencies, start Playwriter relay, verify browser readiness
+  status                Print comprehensive JARVIS status (Ollama, Agent Desktop, Playwriter, browser)
+  stop                  Stop JARVIS-owned Playwriter relay (does not close Chrome)
   browser <subcommand>  Inspect browser profiles and relay status
     profiles            List discovered Chrome profiles on this PC
     extensions          List installed Chrome extension metadata
@@ -117,6 +120,18 @@ export async function runCli(
     return runHealthCommand(options, io, dependencies);
   }
 
+  if (command === 'start') {
+    return runStartCommand(io, dependencies);
+  }
+
+  if (command === 'status') {
+    return runStatusCommand(io, dependencies);
+  }
+
+  if (command === 'stop') {
+    return runStopCommand(io, dependencies);
+  }
+
   if (command === 'browser') {
     return runBrowserCommand(options, io);
   }
@@ -137,11 +152,170 @@ export async function runCli(
   return 1;
 }
 
+async function runStartCommand(io: CliIo, dependencies: CliDependencies): Promise<number> {
+  const config = dependencies.loadConfig();
+
+  io.stdout('JARVIS STARTUP\n\n');
+
+  // 1. Check Node.js
+  io.stdout(`Node.js        ${process.version}\n`);
+
+  // 2. Check Ollama
+  let ollamaReady = false;
+  let ollamaModel = 'unknown';
+  try {
+    const response = await fetch(`${config.ollama.baseUrl}/api/tags`);
+    if (response.ok) {
+      const data: unknown = await response.json();
+      ollamaModel = findOllamaModel(data, config.ollama.model);
+      ollamaReady = true;
+    }
+  } catch {
+    // Ollama not reachable
+  }
+  io.stdout(`Ollama         ${ollamaReady ? 'READY' : 'NOT READY'}\n`);
+  io.stdout(`Model          ${ollamaModel}\n`);
+
+  // 3. Check Agent Desktop
+  let agentDesktopReady = false;
+  try {
+    const agentDesktopClient = (await import('./desktop/agent-desktop-client.js'))
+      .AgentDesktopClient;
+    const ad = new agentDesktopClient();
+    const status = await ad.status();
+    agentDesktopReady = status.permissions.accessibility?.state === 'granted';
+  } catch {
+    // Not ready
+  }
+  io.stdout(`Agent Desktop  ${agentDesktopReady ? 'READY' : 'NOT READY'}\n`);
+
+  // 4. Start Playwriter relay
+  io.stdout('Playwriter     STARTING...\n');
+  const startLogger = new Logger({
+    level: config.log.level,
+    logDir: config.log.dir,
+    service: 'jarvis.start',
+    console: false,
+    file: true,
+  });
+  const browser = new BrowserManager({ logger: startLogger });
+
+  let relayReady = false;
+  let relayStatus: { listening: boolean; pid: number | null } = { listening: false, pid: null };
+
+  try {
+    await browser.ensureRelayRunning();
+    const pmStatus = await browser.getRelayProcessStatus();
+    relayStatus = { listening: pmStatus.listening, pid: pmStatus.pid };
+    relayReady = pmStatus.listening;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    io.stdout(`Playwriter     FAILED: ${msg}\n`);
+  }
+
+  if (relayReady) {
+    io.stdout(
+      `Playwriter     RUNNING (PID: ${relayStatus.pid === null ? 'unknown' : String(relayStatus.pid)})\n`,
+    );
+  } else {
+    io.stdout('Playwriter     FAILED\n');
+  }
+
+  // 5. Check Chrome extension connection
+  let extensionConnected = false;
+  let enabledTabs = 0;
+  let responsiveTabs = 0;
+
+  if (relayReady) {
+    try {
+      await browser.connect();
+      const readiness = await browser.verifyReadiness({ retries: 1 });
+      const r = readiness.readiness;
+      extensionConnected = r.extensionCount !== null && r.extensionCount > 0;
+      enabledTabs = r.enabledTabs;
+      responsiveTabs = r.responsiveTabs;
+      await browser.disconnect();
+    } catch {
+      // Extension not connected
+    }
+  }
+
+  io.stdout(`Extension      ${extensionConnected ? 'CONNECTED' : 'NOT CONNECTED'}\n`);
+  io.stdout(`Enabled Tabs   ${String(enabledTabs)}\n`);
+  io.stdout(`Responsive     ${String(responsiveTabs)}\n`);
+
+  // 6. Browser readiness verification
+  let browserReady = false;
+  if (extensionConnected && responsiveTabs > 0) {
+    try {
+      const browser2 = new BrowserManager({ logger: startLogger });
+      await browser2.connect();
+      await browser2.verifyReadiness({ retries: 1 });
+      browserReady = true;
+      await browser2.disconnect();
+    } catch {
+      // Not ready
+    }
+  }
+  io.stdout(`Browser        ${browserReady ? 'READY' : 'NOT READY'}\n`);
+
+  // Summary
+  io.stdout('\n');
+  if (ollamaReady && agentDesktopReady && relayReady && extensionConnected && browserReady) {
+    io.stdout('JARVIS IS READY.\n');
+    return 0;
+  } else {
+    io.stdout('JARVIS NOT READY.\n');
+
+    if (!relayReady) {
+      io.stdout('\nPlaywriter relay failed to start. Check logs in logs/playwriter/');
+    }
+    if (relayReady && !extensionConnected) {
+      io.stdout(
+        '\nRELAY READY\nEXTENSION NOT CONNECTED\n\nOpen your existing Chrome profile and click the Playwriter extension\non the tab you want JARVIS to control.\n\nWaiting for connection...',
+      );
+      // Wait for extension connection with timeout
+      const waitBrowser = new BrowserManager({ logger: startLogger });
+      try {
+        await waitBrowser.ensureRelayRunning();
+        const startWait = Date.now();
+        const timeoutMs = 60_000;
+        while (Date.now() - startWait < timeoutMs) {
+          try {
+            await waitBrowser.connect();
+            const readiness = await waitBrowser.verifyReadiness({ retries: 0 });
+            if (
+              readiness.readiness.extensionCount !== null &&
+              readiness.readiness.extensionCount > 0
+            ) {
+              io.stdout('\nExtension connected! JARVIS IS READY.\n');
+              await waitBrowser.disconnect();
+              return 0;
+            }
+          } catch {
+            // Still waiting
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        io.stdout('\nTimeout waiting for extension connection.\n');
+        await waitBrowser.disconnect();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Unknown error';
+        io.stdout(`\nError waiting for extension: ${msg}\n`);
+      }
+    } else {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  return browserReady ? 0 : 1;
+}
+
 async function runBrowserCommand(options: readonly string[], io: CliIo): Promise<number> {
   const [subcommand] = options;
+  const relay = new RelayManager();
 
   if (!subcommand || subcommand === 'status') {
-    const relay = new RelayManager();
     const status = await relay.getStatus();
     io.stdout(
       `Playwriter Relay at ${status.host}:${String(status.port)}: ${status.running ? 'RUNNING' : 'OFFLINE'}\n`,
@@ -590,6 +764,158 @@ export async function runDefaultAgent(
   });
 
   return loop.run({ userMessage, signal: options.signal });
+}
+
+async function runStatusCommand(io: CliIo, dependencies: CliDependencies): Promise<number> {
+  const config = dependencies.loadConfig();
+  io.stdout('JARVIS STATUS\n\n');
+
+  // 1. Ollama
+  let ollamaReady = false;
+  let ollamaModel = 'unknown';
+  try {
+    const response = await fetch(`${config.ollama.baseUrl}/api/tags`);
+    if (response.ok) {
+      const data: unknown = await response.json();
+      ollamaModel = findOllamaModel(data, config.ollama.model);
+      ollamaReady = true;
+    }
+  } catch {
+    // Not ready
+  }
+  io.stdout(`Ollama         ${ollamaReady ? 'READY' : 'NOT READY'} (${ollamaModel})\n`);
+
+  // 2. Agent Desktop
+  let agentDesktopReady = false;
+  let adVersion = 'unknown';
+  try {
+    const agentDesktopClient = (await import('./desktop/agent-desktop-client.js'))
+      .AgentDesktopClient;
+    const ad = new agentDesktopClient();
+    const status = await ad.status();
+    agentDesktopReady = status.permissions.accessibility?.state === 'granted';
+    adVersion = status.version;
+  } catch {
+    // Not ready
+  }
+  io.stdout(`Agent Desktop  ${agentDesktopReady ? 'READY' : 'NOT READY'} (v${adVersion})\n`);
+
+  // 3. Playwriter Relay
+  let relayReady = false;
+  let relayPid: number | null = null;
+  let relayOwner = 'unknown';
+  let extensionConnected = false;
+  let extensionEmail = 'none';
+  let enabledTabs = 0;
+  let responsiveTabs = 0;
+  let browserReady = false;
+
+  try {
+    const logger = new Logger({
+      level: config.log.level,
+      logDir: config.log.dir,
+      service: 'jarvis.status',
+      console: false,
+      file: false,
+    });
+    const browser = new BrowserManager({ logger });
+    const pmStatus = await browser.getRelayProcessStatus();
+    relayPid = pmStatus.pid;
+    relayOwner = pmStatus.owner;
+    relayReady = pmStatus.listening;
+
+    if (relayReady) {
+      await browser.connect();
+      const readiness = await browser.verifyReadiness({ retries: 1 });
+      const r = readiness.readiness;
+      extensionConnected = r.extensionCount !== null && r.extensionCount > 0;
+      enabledTabs = r.enabledTabs;
+      responsiveTabs = r.responsiveTabs;
+      browserReady = r.sessionReady;
+      if (r.extensionCount !== null && r.extensionCount > 0) {
+        // Get extension email
+        const profile = browser.getConnectedProfile();
+        extensionEmail = profile?.email ?? 'connected';
+      }
+      await browser.disconnect();
+    }
+    await browser.dispose();
+  } catch {
+    // Relay not available
+  }
+
+  io.stdout(
+    `Playwriter     ${relayReady ? 'RUNNING' : 'OFFLINE'} (PID: ${relayPid === null ? 'N/A' : String(relayPid)}, Owner: ${relayOwner})\n`,
+  );
+  io.stdout(
+    `Extension      ${extensionConnected ? 'CONNECTED' : 'NOT CONNECTED'} (${extensionEmail})\n`,
+  );
+  io.stdout(`Enabled Tabs   ${String(enabledTabs)}\n`);
+  io.stdout(`Responsive     ${String(responsiveTabs)}\n`);
+  io.stdout(`Browser        ${browserReady ? 'READY' : 'NOT READY'}\n`);
+
+  // Summary
+  io.stdout('\n');
+  if (ollamaReady && agentDesktopReady && relayReady && extensionConnected && browserReady) {
+    io.stdout('JARVIS IS READY.\n');
+  } else {
+    io.stdout('JARVIS NOT READY.\n');
+  }
+  return ollamaReady && agentDesktopReady && relayReady && extensionConnected && browserReady
+    ? 0
+    : 1;
+}
+
+async function runStopCommand(io: CliIo, dependencies: CliDependencies): Promise<number> {
+  const config = dependencies.loadConfig();
+  const logger = new Logger({
+    level: config.log.level,
+    logDir: config.log.dir,
+    service: 'jarvis.stop',
+    console: true,
+    file: true,
+  });
+
+  io.stdout('Stopping JARVIS-owned Playwriter relay...\n');
+
+  try {
+    const browser = new BrowserManager({ logger });
+    const pmStatus = await browser.getRelayProcessStatus();
+
+    if (!pmStatus.running || pmStatus.owner !== 'jarvis') {
+      io.stdout('No JARVIS-owned relay running.\n');
+      await browser.dispose();
+      return 0;
+    }
+
+    io.stdout(
+      `Stopping relay (PID: ${pmStatus.pid === null ? 'unknown' : String(pmStatus.pid)})...\n`,
+    );
+    await browser.stopRelay();
+    io.stdout('Relay stopped.\n');
+    await browser.dispose();
+    return 0;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    io.stderr(`Failed to stop relay: ${msg}\n`);
+    return 1;
+  }
+}
+
+function findOllamaModel(payload: unknown, configuredModel: string): string {
+  if (typeof payload !== 'object' || payload === null || !('models' in payload)) {
+    return configuredModel;
+  }
+  const models: unknown = payload.models;
+  if (!Array.isArray(models)) return configuredModel;
+  const match = models.find((model) => isNamedModel(model, configuredModel));
+  return match?.name ?? configuredModel;
+}
+
+function isNamedModel(value: unknown, name: string): value is { name: string } {
+  if (typeof value !== 'object' || value === null || !('name' in value)) return false;
+  const modelName: unknown = value.name;
+  return typeof modelName === 'string' && modelName === name;
 }
 
 const entryPoint = process.argv[1];

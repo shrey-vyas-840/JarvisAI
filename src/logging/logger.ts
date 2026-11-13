@@ -17,6 +17,20 @@ export interface LoggerOptions {
   stderr?: (line: string) => void;
 }
 
+export interface LoggerLike {
+  debug(message: string, metadata?: LogMetadata): void;
+  info(message: string, metadata?: LogMetadata): void;
+  warn(message: string, metadata?: LogMetadata): void;
+  error(message: string, metadata?: LogMetadata): void;
+}
+
+export const NOOP_LOGGER: LoggerLike = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
 interface LogEntry {
   timestamp: string;
   level: LogLevel;
