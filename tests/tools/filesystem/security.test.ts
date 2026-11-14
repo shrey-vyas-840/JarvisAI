@@ -97,7 +97,7 @@ function toolMessages(request: OllamaChatRequest | undefined): Record<string, un
 }
 
 describe('filesystem tools through the ToolRegistry', () => {
-  it('registers six tools with read-only and approval-gated permissions', () => {
+  it('registers seven tools with read-only and approval-gated permissions', () => {
     const roots = createTempRoots();
 
     try {
@@ -111,6 +111,7 @@ describe('filesystem tools through the ToolRegistry', () => {
         ['get_file_info', 'read-only'],
         ['create_directory', 'requires-approval'],
         ['write_text_file', 'requires-approval'],
+        ['verify_artifact', 'read-only'],
       ]);
 
       for (const tool of tools) {
@@ -133,6 +134,7 @@ describe('filesystem tools through the ToolRegistry', () => {
         'get_file_info',
         'create_directory',
         'write_text_file',
+        'verify_artifact',
       ]);
 
       const readTool = ollamaTools.find((tool) => tool.function.name === 'read_text_file');

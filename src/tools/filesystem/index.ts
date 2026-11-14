@@ -7,6 +7,7 @@ import { PathGuard } from './path-guard.js';
 import { createReadTextFileTool } from './read-text-file.js';
 import { createSearchTextTool } from './search-text.js';
 import { createWriteTextFileTool } from './write-text-file.js';
+import { createVerifyArtifactTool } from './verify-artifact.js';
 
 export interface CreateFilesystemToolsOptions {
   readonly guard?: PathGuard;
@@ -30,6 +31,7 @@ export function createFilesystemTools(
     createGetFileInfoTool({ guard }),
     createCreateDirectoryTool({ guard }),
     createWriteTextFileTool({ guard }),
+    createVerifyArtifactTool({ guard }),
   ];
 }
 
@@ -53,5 +55,6 @@ export { createListDirectoryTool } from './list-directory.js';
 export { createReadTextFileTool } from './read-text-file.js';
 export { createSearchTextTool } from './search-text.js';
 export { createWriteTextFileTool } from './write-text-file.js';
+export { createVerifyArtifactTool } from './verify-artifact.js';
 export { PathGuard, FilesystemError } from './path-guard.js';
 export type { FilesystemErrorCode, PathGuardRoots, ResolvedPath, RootId } from './path-guard.js';
