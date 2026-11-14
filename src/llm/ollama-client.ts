@@ -3,9 +3,12 @@ import { z } from 'zod';
 export type OllamaRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export interface OllamaToolCall {
+  type?: 'function' | undefined;
+  id?: string | undefined;
   function: {
     name: string;
     arguments: Record<string, unknown>;
+    index?: number | undefined;
   };
 }
 
@@ -28,6 +31,7 @@ export interface OllamaToolDefinition {
 export interface OllamaChatRequest {
   messages: readonly OllamaMessage[];
   tools?: readonly OllamaToolDefinition[];
+  format?: 'json';
 }
 
 export interface OllamaChatMetrics {
@@ -83,9 +87,12 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRY_COUNT = 1;
 
 const toolCallSchema = z.object({
+  type: z.literal('function').optional(),
+  id: z.string().optional(),
   function: z.object({
     name: z.string().min(1),
     arguments: z.record(z.string(), z.unknown()).default({}),
+    index: z.number().int().optional(),
   }),
 });
 
@@ -187,6 +194,9 @@ export class OllamaClient {
 
     if (request.tools !== undefined && request.tools.length > 0) {
       body.tools = request.tools;
+    }
+    if (request.format !== undefined) {
+      body.format = request.format;
     }
 
     return body;

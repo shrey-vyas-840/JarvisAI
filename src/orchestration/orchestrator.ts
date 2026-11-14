@@ -12,6 +12,7 @@ import type {
   ToolExecutionContext,
   Logger,
   PersistedPlan,
+  BackendName,
 } from './types.js';
 
 const DEFAULT_MAX_RETRIES = 2;
@@ -113,7 +114,7 @@ function resultContainsRef(result: unknown, expectedRef: string): boolean {
 }
 
 function isPotentialActionTool(toolName: string): boolean {
-  return /(?:action|click|fill|type|press|submit|write|create|delete|move|toggle|check|uncheck|expand|collapse|set_value|send)/i.test(
+  return /(?:action|click|fill|type|press|submit|write|create|new_tab|navigate|delete|move|toggle|check|uncheck|expand|collapse|set_value|send)/i.test(
     toolName,
   );
 }
@@ -124,6 +125,13 @@ function hasSafeNotDeliveredDisposition(error: string | null): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function backendScope(backend: BackendName): 'browser' | 'desktop' | 'vision' | null {
+  if (backend === 'playwriter') return 'browser';
+  if (backend === 'vision') return 'vision';
+  if (backend === 'local') return null;
+  return 'desktop';
 }
 
 function sanitizeForPersistence(obj: unknown): unknown {
@@ -166,6 +174,8 @@ export class Orchestrator {
   private readonly maxRetries: number;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
+  private readonly backendRouter: OrchestratorOptions['backendRouter'];
+  private readonly onStepProposal: OrchestratorOptions['onStepProposal'];
   private currentPlan: Plan | null = null;
   private readonly signal: AbortSignal;
   private readonly abortController: AbortController;
@@ -177,8 +187,23 @@ export class Orchestrator {
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
+    this.backendRouter = options.backendRouter;
+    this.onStepProposal = options.onStepProposal;
     this.abortController = new AbortController();
     this.signal = this.abortController.signal;
+    if (options.signal !== undefined) {
+      if (options.signal.aborted) {
+        this.abortController.abort();
+      } else {
+        options.signal.addEventListener(
+          'abort',
+          () => {
+            this.abortController.abort();
+          },
+          { once: true },
+        );
+      }
+    }
   }
 
   public async createPlan(
@@ -197,11 +222,13 @@ export class Orchestrator {
         retryCount: 0,
       })),
       state: 'PLANNED',
+      stateHistory: [{ state: 'PLANNED', at: this.now().toISOString() }],
       currentStepIndex: 0,
       context: this.createEmptyContext(),
     };
     this.currentPlan = plan;
     await this.persist();
+    this.logger.info('orchestrator.plan_state', { planId: plan.id, state: plan.state });
     return plan;
   }
 
@@ -239,17 +266,33 @@ export class Orchestrator {
       return plan;
     }
 
-    plan.state = 'RUNNING';
+    this.setPlanState(plan, 'RUNNING');
     plan.updatedAt = this.now().toISOString();
     await this.persist();
 
     while (!isTerminalPlanState(plan.state) && !isWaitingForUser(plan) && !isAborted(this.signal)) {
       const step = getNextRunnableStep(plan);
       if (!step) {
+        const pendingStepIds = plan.steps
+          .filter((candidate) => candidate.state === 'PENDING')
+          .map((candidate) => candidate.id);
         skipBlockedSteps(plan.steps, this.now().toISOString());
+        for (const blocked of plan.steps.filter(
+          (candidate) => pendingStepIds.includes(candidate.id) && candidate.state === 'SKIPPED',
+        )) {
+          this.logger.info('orchestrator.step_skipped', {
+            planId: plan.id,
+            stepId: blocked.id,
+            dependencies: blocked.dependsOn,
+          });
+        }
         if (plan.steps.some((candidate) => candidate.state === 'PENDING')) {
-          plan.state = 'FAILED';
+          this.setPlanState(plan, 'FAILED');
           plan.error = 'Plan contains steps with dependencies that cannot be satisfied.';
+        } else if (plan.steps.some((candidate) => candidate.state === 'FAILED')) {
+          plan.error ??=
+            plan.steps.find((candidate) => candidate.state === 'FAILED')?.error ??
+            'One or more planned steps failed.';
         }
         break;
       }
@@ -257,16 +300,35 @@ export class Orchestrator {
       plan.currentStepIndex = plan.steps.findIndex((s) => s.id === step.id);
       const result = await this.executeStep(plan, step);
       if (result === 'ABORTED') {
-        plan.state = 'FAILED';
-        plan.error = 'Orchestration aborted';
+        this.setPlanState(plan, 'FAILED');
+        plan.error ??= 'Orchestration aborted';
         break;
       }
       plan.updatedAt = this.now().toISOString();
       await this.persist();
     }
 
-    if (!isTerminalPlanState(plan.state) && !isWaitingForUser(plan)) {
-      plan.state = computePlanState(plan.steps);
+    if (isAborted(this.signal)) {
+      const cancelledAt = this.now().toISOString();
+      for (const step of plan.steps) {
+        if (step.state === 'PENDING') {
+          step.state = 'SKIPPED';
+          step.error = 'Skipped because orchestration was cancelled.';
+          step.completedAt = cancelledAt;
+          this.logger.info('orchestrator.step_skipped', {
+            planId: plan.id,
+            stepId: step.id,
+            reason: 'cancelled',
+          });
+        }
+      }
+      if (plan.state !== 'FAILED') {
+        const verifiedCount = plan.steps.filter((step) => step.state === 'VERIFIED').length;
+        this.setPlanState(plan, verifiedCount > 0 ? 'PARTIALLY_COMPLETED' : 'FAILED');
+      }
+      plan.error ??= 'Orchestration cancelled';
+    } else if (!isTerminalPlanState(plan.state) && !isWaitingForUser(plan)) {
+      this.setPlanState(plan, computePlanState(plan.steps));
     }
     plan.updatedAt = this.now().toISOString();
     await this.persist();
@@ -279,7 +341,7 @@ export class Orchestrator {
       return;
     }
     if (plan.state === 'RUNNING') {
-      plan.state = 'WAITING_FOR_USER';
+      this.setPlanState(plan, 'WAITING_FOR_USER');
       plan.updatedAt = this.now().toISOString();
       await this.persist();
     }
@@ -291,7 +353,7 @@ export class Orchestrator {
       return null;
     }
     if (plan.state === 'WAITING_FOR_USER') {
-      plan.state = 'RUNNING';
+      this.setPlanState(plan, 'RUNNING');
       plan.updatedAt = this.now().toISOString();
       await this.persist();
       return this.runPlan();
@@ -303,7 +365,14 @@ export class Orchestrator {
     this.abortController.abort();
     const plan = this.currentPlan;
     if (plan && !isTerminalPlanState(plan.state)) {
-      plan.state = 'FAILED';
+      for (const step of plan.steps) {
+        if (step.state === 'PENDING') {
+          step.state = 'SKIPPED';
+          step.error = 'Skipped because orchestration was aborted.';
+          step.completedAt = this.now().toISOString();
+        }
+      }
+      this.setPlanState(plan, 'FAILED');
       plan.error = 'Aborted by user';
       plan.updatedAt = this.now().toISOString();
       await this.persist();
@@ -347,12 +416,43 @@ export class Orchestrator {
 
     let staleRecoveryAttempted = false;
     try {
-      let receipt = await this.registry.execute(step.tool, step.args, context);
+      const scope = backendScope(step.backend);
+      const selectedBackend =
+        scope === null ? null : await this.backendRouter?.selectBackend([step.tool], scope);
+      if (this.backendRouter !== undefined && scope !== null && selectedBackend === null) {
+        throw new Error(`No available backend supports required tool: ${step.tool}`);
+      }
+      step.selectedBackend = selectedBackend?.name ?? step.backend;
+
+      step.resolvedArgs = this.resolveStepArguments(plan, step);
+
+      if (this.onStepProposal !== undefined) {
+        step.modelProposedTools = [...(await this.onStepProposal(plan, step))];
+        this.logger.info('orchestrator.step_proposed', {
+          planId: plan.id,
+          stepId: step.id,
+          expectedToolName: step.tool,
+          actualToolNames: step.modelProposedTools,
+          mismatch:
+            step.modelProposedTools.length !== 1 || step.modelProposedTools[0] !== step.tool,
+        });
+      }
+
+      let receipt = await this.registry.execute(step.tool, step.resolvedArgs, context);
 
       if (this.isSafelyRecoverableStaleReference(step, receipt)) {
         staleRecoveryAttempted = true;
         step.retryCount += 1;
         receipt = await this.recoverStaleDesktopAction(plan, step, context);
+      }
+      step.receipt = receipt;
+
+      if (isAborted(this.signal)) {
+        step.state = 'FAILED';
+        step.error =
+          'Step completed after orchestration cancellation; delivery is not accepted as verified.';
+        step.completedAt = this.now().toISOString();
+        return 'ABORTED';
       }
 
       if (receipt.status === 'cancelled') {
@@ -384,9 +484,22 @@ export class Orchestrator {
         return 'FAILED';
       }
 
+      if (step.requiresVerifiedReceipt === true && receipt.verification !== 'verified') {
+        step.state = 'FAILED';
+        step.error = 'Tool receipt did not verify the required workflow step.';
+        step.completedAt = this.now().toISOString();
+        this.logger.error('orchestrator.step_verification_failed', {
+          planId: plan.id,
+          stepId: step.id,
+          tool: step.tool,
+          verification: receipt.verification,
+        });
+        return 'FAILED';
+      }
+
       if (receipt.status === 'approval_required' || receipt.status === 'approval_unavailable') {
         step.state = 'WAITING_VERIFICATION';
-        plan.state = 'WAITING_FOR_USER';
+        this.setPlanState(plan, 'WAITING_FOR_USER');
         this.logger.warn('orchestrator.step_awaiting_approval', {
           planId: plan.id,
           stepId: step.id,
@@ -469,6 +582,42 @@ export class Orchestrator {
       });
       return 'FAILED';
     }
+  }
+
+  private resolveStepArguments(plan: Plan, step: Step): Record<string, unknown> {
+    const args = { ...step.args };
+    for (const [argumentName, source] of Object.entries(step.argumentSources ?? {})) {
+      const sourceStep = plan.steps.find((candidate) => candidate.id === source.stepId);
+      if (sourceStep?.state !== 'VERIFIED') {
+        throw new Error(`Step argument ${argumentName} requires a verified prerequisite.`);
+      }
+      let value: unknown = sourceStep.result;
+      for (const key of source.resultPath) {
+        if (!isRecord(value) || !(key in value)) {
+          throw new Error(
+            `Step argument ${argumentName} could not be resolved from a prior result.`,
+          );
+        }
+        value = value[key];
+      }
+      if (value === undefined || value === null) {
+        throw new Error(`Step argument ${argumentName} is missing from a prior result.`);
+      }
+      args[argumentName] = value;
+    }
+    return args;
+  }
+
+  private setPlanState(plan: Plan, state: Plan['state']): void {
+    if (plan.state === state) return;
+    const previousState = plan.state;
+    plan.state = state;
+    plan.stateHistory = [...(plan.stateHistory ?? []), { state, at: this.now().toISOString() }];
+    this.logger.info('orchestrator.plan_state', {
+      planId: plan.id,
+      previousState,
+      state,
+    });
   }
 
   private isSafelyRecoverableStaleReference(

@@ -83,9 +83,12 @@ describe('OllamaClient', () => {
             content: 'JARVIS is ready.',
             tool_calls: [
               {
+                type: 'function',
+                id: 'call-1',
                 function: {
                   name: 'get_jarvis_status',
                   arguments: {},
+                  index: 0,
                 },
               },
             ],
@@ -120,9 +123,12 @@ describe('OllamaClient', () => {
     expect(requests[0]?.body.tools).toEqual([statusTool]);
     expect(result.message.tool_calls).toEqual([
       {
+        type: 'function',
+        id: 'call-1',
         function: {
           name: 'get_jarvis_status',
           arguments: {},
+          index: 0,
         },
       },
     ]);
@@ -161,6 +167,30 @@ describe('OllamaClient', () => {
 
     expect(attempts).toBe(2);
     expect(result.message.content).toBe('Recovered');
+  });
+
+  it('requests Ollama JSON mode for structured planner responses', async () => {
+    const requests: RecordedRequest[] = [];
+    const fetchImpl: typeof fetch = (input, init) => {
+      const body = init?.body;
+      if (typeof body !== 'string') throw new Error('Expected request body');
+      requests.push({
+        url: requestUrl(input),
+        body: JSON.parse(body) as Record<string, unknown>,
+        signal: init?.signal,
+      });
+      return Promise.resolve(jsonResponse(chatResponse('{"goal":"test","steps":[]}')));
+    };
+    const client = new OllamaClient({
+      baseUrl: 'http://127.0.0.1:11434',
+      model: 'qwen3.5:9b',
+      numCtx: 4096,
+      fetch: fetchImpl,
+    });
+
+    await client.chat({ messages: [{ role: 'user', content: 'plan' }], format: 'json' });
+
+    expect(requests[0]?.body.format).toBe('json');
   });
 
   it('does not retry a non-retryable HTTP error', async () => {

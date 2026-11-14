@@ -14,6 +14,15 @@ export interface Step {
   readonly backend: BackendName;
   readonly dependsOn: readonly string[];
   readonly expectedOutcome: string;
+  readonly argumentSources?: Record<string, StepArgumentSource>;
+  readonly preconditions?: readonly string[];
+  readonly requiresVerifiedReceipt?: boolean;
+  readonly verificationMethod?: string;
+  readonly failurePolicy?: string;
+  selectedBackend?: BackendName;
+  resolvedArgs?: Record<string, unknown>;
+  modelProposedTools?: string[];
+  receipt?: ToolExecutionReceipt;
   verification?: {
     tool: string;
     args: Record<string, unknown>;
@@ -27,6 +36,11 @@ export interface Step {
   completedAt?: string;
 }
 
+export interface StepArgumentSource {
+  readonly stepId: string;
+  readonly resultPath: readonly string[];
+}
+
 export interface Plan {
   readonly id: string;
   readonly goal: string;
@@ -34,6 +48,7 @@ export interface Plan {
   updatedAt: string;
   readonly steps: Step[];
   state: PlanState;
+  stateHistory?: { readonly state: PlanState; readonly at: string }[];
   currentStepIndex: number;
   context: ExecutionContext;
   error?: string;
@@ -73,6 +88,16 @@ export interface OrchestratorOptions {
   readonly verificationTimeoutMs?: number;
   readonly now?: () => Date;
   readonly idFactory?: () => string;
+  readonly backendRouter?: BackendSelector;
+  readonly signal?: AbortSignal;
+  readonly onStepProposal?: (plan: Plan, step: Step) => Promise<readonly string[]>;
+}
+
+export interface BackendSelector {
+  selectBackend(
+    requiredTools: readonly string[],
+    preferredScope?: 'browser' | 'desktop' | 'vision',
+  ): Promise<{ readonly name: BackendName } | null>;
 }
 
 export interface ToolRegistry {
@@ -128,6 +153,7 @@ export interface PersistedPlan {
   updatedAt: string;
   steps: Step[];
   state: PlanState;
+  stateHistory?: { readonly state: PlanState; readonly at: string }[];
   currentStepIndex: number;
   context: ExecutionContext;
   error?: string;

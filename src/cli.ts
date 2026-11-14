@@ -22,6 +22,7 @@ import { runHealthChecks } from './health/checks.js';
 import { formatHealthReport } from './health/format.js';
 import { OllamaClient } from './llm/ollama-client.js';
 import { Logger } from './logging/logger.js';
+import { BackendRouter } from './orchestration/backend-router.js';
 import { CliApprovalProvider } from './security/cli-approval-provider.js';
 import { createBrowserTools } from './tools/browser/index.js';
 import { createAgentDesktopTools } from './tools/desktop/agent-desktop-tools.js';
@@ -729,6 +730,9 @@ async function runAgentCommand(
   try {
     const config = dependencies.loadConfig();
     const result = await runAgent(config, userMessage, { signal: controller.signal });
+    if (result.plan !== undefined) {
+      writePlanSummary(io, result);
+    }
 
     if (result.status === 'cancelled') {
       io.stderr(`Agent run cancelled: ${result.error ?? 'cancelled'}\n`);
@@ -745,6 +749,25 @@ async function runAgentCommand(
     }
 
     io.stdout(`${result.finalResponse}\n`);
+    if (
+      /\b(report|return|show)\b/i.test(userMessage) &&
+      /\b(actual|result|verified|returned)\b/i.test(userMessage)
+    ) {
+      const evidence = result.receipts.filter((receipt) => receipt.status === 'success');
+      if (evidence.length > 0) {
+        io.stdout(
+          `\nVerified tool results:\n${JSON.stringify(
+            evidence.map((receipt) => ({
+              tool: receipt.toolName,
+              verification: receipt.verification,
+              result: receipt.result,
+            })),
+            null,
+            2,
+          )}\n`,
+        );
+      }
+    }
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -752,6 +775,24 @@ async function runAgentCommand(
     return 1;
   } finally {
     process.removeListener('SIGINT', onSigint);
+  }
+}
+
+function writePlanSummary(io: CliIo, result: AgentRunResult): void {
+  const plan = result.plan;
+  if (plan === undefined) return;
+  const statePath = (plan.stateHistory ?? []).map((entry) => entry.state).join(' -> ');
+  io.stdout(`Plan ID: ${plan.id}\nPlan state: ${statePath}\nFinal state: ${plan.state}\n`);
+  for (const step of plan.steps) {
+    const receipt = step.receipt;
+    io.stdout(
+      `Step ${step.id}: ${step.tool} via ${step.selectedBackend ?? step.backend}; ${step.state}; receipt ${receipt?.status ?? 'none'}/${receipt?.verification ?? 'none'}\n`,
+    );
+    if (step.modelProposedTools !== undefined) {
+      io.stdout(
+        `  Model proposal: ${step.modelProposedTools.join(', ') || 'no tool call'}; expected: ${step.tool}\n`,
+      );
+    }
   }
 }
 
@@ -774,16 +815,26 @@ export async function runDefaultAgent(
   });
   const registry = new ToolRegistry({ approvalProvider: new CliApprovalProvider() });
   const desktopManager = new DesktopManager();
+  const browserManager = new BrowserManager();
+  const agentDesktopClient = new AgentDesktopClient();
+  const desktopSelector = new DesktopBackendSelector({
+    agentDesktop: agentDesktopClient,
+    pywinauto: desktopManager,
+  });
 
   const tools = [
     createGetJarvisStatusTool(config),
     ...createFilesystemTools(config),
-    ...createBrowserTools({ config }),
+    ...createBrowserTools({ config, browserManager }),
     ...createResearchTools(),
     ...createGeoTools(),
     ...createExportTools({ config }),
     ...createDesktopTools({ config, desktopManager }),
-    ...createAgentDesktopTools({ desktopManager }),
+    ...createAgentDesktopTools({
+      client: agentDesktopClient,
+      selector: desktopSelector,
+      desktopManager,
+    }),
   ];
 
   for (const tool of tools) {
@@ -795,13 +846,29 @@ export async function runDefaultAgent(
     });
   }
 
+  const backendRouter = new BackendRouter({
+    registry,
+    logger,
+    browserManager,
+    agentDesktopClient,
+    desktopManager,
+  });
+
   const loop = new AgentLoop({
     client,
     registry,
     logger,
+    backendRouter,
+    planningEnabled: true,
+    limits: { maxToolCalls: 48, maxToolRounds: 4 },
   });
 
-  return loop.run({ userMessage, signal: options.signal });
+  try {
+    return await loop.run({ userMessage, signal: options.signal });
+  } finally {
+    await browserManager.disconnect();
+    desktopManager.dispose();
+  }
 }
 
 async function runStatusCommand(io: CliIo, dependencies: CliDependencies): Promise<number> {

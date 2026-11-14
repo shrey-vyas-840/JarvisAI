@@ -10,7 +10,12 @@ export interface StepBuilder {
   backend: BackendName;
   dependsOn: string[];
   expectedOutcome: string;
-  verification:
+  argumentSources?: Record<string, { stepId: string; resultPath: string[] }>;
+  preconditions?: string[];
+  requiresVerifiedReceipt?: boolean;
+  verificationMethod?: string;
+  failurePolicy?: string;
+  verification?:
     | {
         tool: string;
         args: Record<string, unknown>;
@@ -24,9 +29,24 @@ export class PlanBuilder {
   private stepIdMap = new Map<string, string>();
 
   public addStep(
-    step: Omit<StepBuilder, 'id' | 'backend' | 'dependsOn'> & {
+    step: Omit<
+      StepBuilder,
+      | 'id'
+      | 'backend'
+      | 'dependsOn'
+      | 'argumentSources'
+      | 'preconditions'
+      | 'requiresVerifiedReceipt'
+      | 'verificationMethod'
+      | 'failurePolicy'
+    > & {
       backend?: BackendName;
       dependsOn?: string[];
+      argumentSources?: Record<string, { stepDescription: string; resultPath: string[] }>;
+      preconditions?: string[];
+      requiresVerifiedReceipt?: boolean;
+      verificationMethod?: string;
+      failurePolicy?: string;
     },
   ): this {
     const id = randomUUID();
@@ -39,7 +59,99 @@ export class PlanBuilder {
       backend: step.backend ?? inferBackendFromTool(step.tool),
       dependsOn: step.dependsOn?.map((d) => this.stepIdMap.get(d) ?? d) ?? [],
       expectedOutcome: step.expectedOutcome,
-      verification: step.verification,
+      ...(step.preconditions === undefined ? {} : { preconditions: step.preconditions }),
+      ...(step.verification === undefined ? {} : { verification: step.verification }),
+      ...(step.argumentSources === undefined
+        ? {}
+        : {
+            argumentSources: Object.fromEntries(
+              Object.entries(step.argumentSources).map(([name, source]) => [
+                name,
+                {
+                  stepId: this.stepIdMap.get(source.stepDescription) ?? source.stepDescription,
+                  resultPath: source.resultPath,
+                },
+              ]),
+            ),
+          }),
+      ...(step.requiresVerifiedReceipt === undefined
+        ? {}
+        : { requiresVerifiedReceipt: step.requiresVerifiedReceipt }),
+      ...(step.verificationMethod === undefined
+        ? {}
+        : { verificationMethod: step.verificationMethod }),
+      ...(step.failurePolicy === undefined ? {} : { failurePolicy: step.failurePolicy }),
+    });
+    return this;
+  }
+
+  public addBrowserUrlWorkflow(url: string): this {
+    const connect = 'Connect existing Chrome profile';
+    const create = 'Create a JARVIS-owned browser tab';
+    const navigate = `Navigate JARVIS tab to ${url}`;
+    const readUrl = 'Read back browser URL';
+    const readTitle = 'Read back browser title';
+    const readText = 'Read back visible browser text';
+    const requireVerifiedReceipt = true;
+
+    this.addStep({
+      description: connect,
+      tool: 'browser_connect_profile',
+      args: {},
+      expectedOutcome: 'Connected profile is ready',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
+    });
+    this.addStep({
+      description: create,
+      tool: 'browser_new_tab',
+      args: { url: 'about:blank' },
+      dependsOn: [connect],
+      expectedOutcome: 'A current JARVIS-owned tab with a stable ID is created',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
+    });
+    this.addStep({
+      description: navigate,
+      tool: 'browser_navigate',
+      args: { url },
+      dependsOn: [create],
+      argumentSources: {
+        tabId: { stepDescription: create, resultPath: ['tab', 'id'] },
+      },
+      expectedOutcome: 'The requested URL is loaded in the created tab',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
+    });
+    this.addStep({
+      description: readUrl,
+      tool: 'browser_get_page_url',
+      args: { expectedUrl: url },
+      dependsOn: [navigate],
+      argumentSources: {
+        tabId: { stepDescription: create, resultPath: ['tab', 'id'] },
+      },
+      expectedOutcome: 'The current URL matches the requested URL',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
+    });
+    this.addStep({
+      description: readTitle,
+      tool: 'browser_get_page_title',
+      args: {},
+      dependsOn: [readUrl],
+      argumentSources: {
+        tabId: { stepDescription: create, resultPath: ['tab', 'id'] },
+      },
+      expectedOutcome: 'A non-empty page title is read from the created tab',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
+    });
+    this.addStep({
+      description: readText,
+      tool: 'browser_get_page_text',
+      args: { maxLength: 20_000 },
+      dependsOn: [readTitle],
+      argumentSources: {
+        tabId: { stepDescription: create, resultPath: ['tab', 'id'] },
+      },
+      expectedOutcome: 'Visible page text is read from the created tab',
+      requiresVerifiedReceipt: requireVerifiedReceipt,
     });
     return this;
   }
@@ -177,10 +289,17 @@ export class PlanBuilder {
           backend: s.backend,
           dependsOn: s.dependsOn,
           expectedOutcome: s.expectedOutcome,
+          ...(s.preconditions === undefined ? {} : { preconditions: s.preconditions }),
+          ...(s.argumentSources === undefined ? {} : { argumentSources: s.argumentSources }),
+          ...(s.requiresVerifiedReceipt === undefined
+            ? {}
+            : { requiresVerifiedReceipt: s.requiresVerifiedReceipt }),
+          ...(s.verificationMethod === undefined
+            ? {}
+            : { verificationMethod: s.verificationMethod }),
+          ...(s.failurePolicy === undefined ? {} : { failurePolicy: s.failurePolicy }),
+          ...(s.verification === undefined ? {} : { verification: s.verification }),
         };
-        if (s.verification !== undefined) {
-          step.verification = s.verification;
-        }
         return step;
       }),
     };
