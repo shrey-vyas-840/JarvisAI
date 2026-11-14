@@ -67,6 +67,30 @@ export interface DesktopControlInfo {
   };
 }
 
+export interface DesktopDocumentTextResult {
+  readonly outcome: 'verified' | 'uncertain';
+  readonly backend: 'pywinauto';
+  readonly target: {
+    readonly window_handle: number;
+    readonly window_title: string;
+    readonly tab_title: string;
+    readonly tab_runtime_id: number[];
+    readonly control_type: string;
+    readonly automation_id: string;
+    readonly runtime_id: number[] | null;
+  };
+  readonly read_pattern: 'ValuePattern' | 'TextPattern';
+  readonly text?: string;
+  readonly character_count?: number;
+  readonly delivery?: 'dispatched' | 'not_dispatched';
+  readonly method?: string;
+  readonly expected_character_count?: number;
+  readonly actual_character_count?: number;
+  readonly readback_matches?: boolean;
+  readonly readback?: string;
+  readonly error?: string | null;
+}
+
 export interface DesktopManagerOptions {
   readonly pythonPath?: string | undefined;
   readonly sidecarScriptPath?: string | undefined;
@@ -189,12 +213,91 @@ export class DesktopManager {
 
   public async typeText(params: {
     text: string;
-    handle?: number | undefined;
-    title?: string | undefined;
-    automation_id?: string | undefined;
+    handle: number;
+    expected_window_title: string;
+    tab_title: string;
+    control_type: 'Document' | 'Edit';
+    expected_text: string;
+    tab_runtime_id?: number[] | undefined;
+    allow_title_change?: boolean | undefined;
+  }): Promise<DesktopDocumentTextResult> {
+    return this.executeAction<DesktopDocumentTextResult>('type_text', params);
+  }
+
+  public async setControlValue(params: {
+    handle: number;
+    expected_window_title: string;
+    control_type: string;
+    expected_value: string;
+    value: string;
     control_title?: string | undefined;
-  }): Promise<{ typed: boolean; length: number }> {
-    return this.executeAction('type_text', params);
+    automation_id?: string | undefined;
+  }): Promise<{
+    outcome: 'verified' | 'uncertain';
+    target: {
+      window_handle: number;
+      window_title: string;
+      control_type: string;
+      title: string;
+      automation_id: string;
+    };
+    delivery: 'dispatched' | 'not_dispatched';
+    readback: string | null;
+    readback_matches: boolean;
+    error: string | null;
+  }> {
+    return this.executeAction('set_control_value', params);
+  }
+
+  public async readDocumentText(params: {
+    handle: number;
+    expected_window_title: string;
+    tab_title: string;
+    control_type: 'Document' | 'Edit';
+    max_chars?: number | undefined;
+    tab_runtime_id?: number[] | undefined;
+    allow_title_change?: boolean | undefined;
+  }): Promise<DesktopDocumentTextResult> {
+    return this.executeAction<DesktopDocumentTextResult>('read_document_text', params);
+  }
+
+  public async closeVerifiedDocument(params: {
+    handle: number;
+    expected_window_title: string;
+    tab_title: string;
+    control_type: 'Document' | 'Edit';
+    expected_text: string;
+    tab_runtime_id?: number[] | undefined;
+    allow_title_change?: boolean | undefined;
+  }): Promise<{
+    outcome: 'verified' | 'uncertain';
+    target: DesktopDocumentTextResult['target'];
+    closed: boolean;
+  }> {
+    return this.executeAction<{
+      outcome: 'verified' | 'uncertain';
+      target: DesktopDocumentTextResult['target'];
+      closed: boolean;
+    }>('close_verified_document', params);
+  }
+
+  public async saveVerifiedDocument(params: {
+    handle: number;
+    expected_window_title: string;
+    tab_title: string;
+    control_type: 'Document' | 'Edit';
+    expected_text: string;
+    tab_runtime_id?: number[] | undefined;
+    allow_title_change?: boolean | undefined;
+  }): Promise<{ outcome: 'dispatched'; delivery: 'dispatched' }> {
+    return this.executeAction('save_verified_document', params);
+  }
+
+  public async openAcceptanceDocument(params: {
+    path: string;
+    allowed_root: string;
+  }): Promise<{ opened: true; pid: number; path: string }> {
+    return this.executeAction('open_acceptance_document', params);
   }
 
   public async pressKey(params: { key: string }): Promise<{ pressed: boolean; key: string }> {

@@ -15,6 +15,9 @@ import { loadConfig, type AppConfig } from './config.js';
 import { AgentLoop, type AgentRunResult } from './core/agent-loop.js';
 import { ToolRegistry } from './core/tool-registry.js';
 import { DesktopManager } from './desktop/desktop-manager.js';
+import { DesktopAcceptanceRunner } from './desktop/acceptance-runner.js';
+import { AgentDesktopClient } from './desktop/agent-desktop-client.js';
+import { DesktopBackendSelector } from './desktop/backend-selector.js';
 import { runHealthChecks } from './health/checks.js';
 import { formatHealthReport } from './health/format.js';
 import { OllamaClient } from './llm/ollama-client.js';
@@ -71,6 +74,7 @@ Commands:
     screen-info         Show virtual screen bounds, DPI, and scaling
     screenshot [name]   Capture the desktop into D:\\AI\\Temp
     vision "<target>"   Locate visible elements with the local vision model
+    acceptance          Run isolated desktop interaction and verification
   vision <subcommand>   Local vision diagnostics
     check               Verify the configured Ollama model supports images
     analyze <png> "<target>"
@@ -142,6 +146,7 @@ export async function runCli(
       options,
       io,
       dependencies.createDesktopManager ?? (() => new DesktopManager()),
+      dependencies.loadConfig,
     );
   }
 
@@ -447,8 +452,32 @@ async function runDesktopCommand(
   options: readonly string[],
   io: CliIo,
   createDesktopManager: () => DesktopManager,
+  loadAppConfig: () => AppConfig,
 ): Promise<number> {
   const [subcommand, ...rest] = options;
+
+  if (subcommand === 'acceptance') {
+    const config = loadAppConfig();
+    const desktop = createDesktopManager();
+    const agentDesktop = new AgentDesktopClient();
+    const selector = new DesktopBackendSelector({ agentDesktop, pywinauto: desktop });
+    try {
+      const report = await new DesktopAcceptanceRunner({
+        tempDirectory: config.paths.temp,
+        desktop,
+        agentDesktop,
+        selector,
+      }).run();
+      io.stdout(`${JSON.stringify(report, null, 2)}\n`);
+      return report.status === 'passed' ? 0 : 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      io.stderr(`Desktop acceptance runner failed: ${message}\n`);
+      return 1;
+    } finally {
+      desktop.dispose();
+    }
+  }
 
   if (!subcommand || subcommand === 'windows') {
     const desktop = createDesktopManager();
@@ -579,7 +608,7 @@ async function runDesktopCommand(
   }
 
   io.stderr(
-    `Unknown desktop subcommand: ${subcommand}\nAvailable: windows, screen-info, screenshot, vision\n`,
+    `Unknown desktop subcommand: ${subcommand}\nAvailable: windows, screen-info, screenshot, vision, acceptance\n`,
   );
   return 1;
 }

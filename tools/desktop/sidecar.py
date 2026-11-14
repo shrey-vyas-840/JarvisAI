@@ -49,6 +49,7 @@ ALLOWED_APPLICATIONS = {
     "calc": "calc.exe",
     "calculator": "calc.exe",
     "explorer": "explorer.exe",
+    "excel": "excel.exe",
 }
 
 def get_desktop():
@@ -369,6 +370,347 @@ def get_controls(params: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
     return controls
 
+def _exact_document_target(params: Dict[str, Any]):
+    handle = int(params["handle"])
+    expected_window_title = params["expected_window_title"]
+    expected_tab_title = params["tab_title"]
+    control_type = params["control_type"]
+    desktop = get_desktop()
+    window = desktop.window(handle=handle)
+    if not window.exists(timeout=2):
+        raise ValueError(f"Target window handle={handle} no longer exists.")
+    if not params.get("allow_title_change", False) and window.window_text() != expected_window_title:
+        raise ValueError(
+            "Target window title changed before interaction; refusing to use a stale window identity."
+        )
+
+    expected_runtime_id = params.get("tab_runtime_id")
+    matching_tabs = []
+    for control in window.descendants():
+        if control.friendly_class_name() != "TabItem":
+            continue
+        if expected_runtime_id is None:
+            if control.window_text().strip() == expected_tab_title:
+                matching_tabs.append(control)
+            continue
+        try:
+            runtime_id = [int(value) for value in control.element_info.element.GetRuntimeId()]
+            if runtime_id == expected_runtime_id:
+                matching_tabs.append(control)
+        except Exception:
+            continue
+    if len(matching_tabs) != 1:
+        raise ValueError(
+            f"Expected one exact document tab, found {len(matching_tabs)}; no input was sent."
+        )
+    tab = matching_tabs[0]
+    if not tab.is_selected():
+        tab.select()
+    if not tab.is_selected() or (
+        not params.get("allow_title_change", False)
+        and window.window_text() != expected_window_title
+    ):
+        raise ValueError("The requested document tab could not be selected and confirmed.")
+
+    matching_controls = [
+        control
+        for control in window.descendants()
+        if control.friendly_class_name() == control_type
+        and control.is_visible()
+        and control.is_enabled()
+    ]
+    if len(matching_controls) != 1:
+        raise ValueError(
+            f"Expected one enabled visible {control_type} control in the selected tab, "
+            f"found {len(matching_controls)}; no input was sent."
+        )
+    control = matching_controls[0]
+    runtime_id = None
+    try:
+        runtime_id = [int(value) for value in control.element_info.element.GetRuntimeId()]
+    except Exception:
+        pass
+    identity = {
+        "window_handle": handle,
+        "window_title": window.window_text(),
+        "tab_title": tab.window_text(),
+        "tab_runtime_id": [int(value) for value in tab.element_info.element.GetRuntimeId()],
+        "control_type": control.friendly_class_name(),
+        "automation_id": getattr(control, "automation_id", lambda: "")() or "",
+        "runtime_id": runtime_id,
+    }
+    return window, tab, control, identity
+
+def _read_uia_text(control, max_chars: int = 16384) -> Tuple[str, str]:
+    try:
+        value = control.iface_value.CurrentValue
+        if isinstance(value, str):
+            return value, "ValuePattern"
+    except Exception:
+        pass
+    try:
+        text_range = control.iface_text.DocumentRange
+        value = text_range.GetText(max_chars)
+        if isinstance(value, str):
+            return value, "TextPattern"
+    except Exception as error:
+        raise RuntimeError(
+            "Target editor exposes neither a readable ValuePattern nor TextPattern."
+        ) from error
+    raise RuntimeError("Target editor returned no readable UI Automation text value.")
+
+def _exact_value_control_target(params: Dict[str, Any]):
+    handle = int(params["handle"])
+    expected_window_title = params["expected_window_title"]
+    control_type = params["control_type"]
+    control_title = params.get("control_title")
+    automation_id = params.get("automation_id")
+    window = get_desktop().window(handle=handle)
+    if not window.exists(timeout=2):
+        raise ValueError("Target window handle no longer exists; delivery=not_delivered retry=safe.")
+    if window.window_text() != expected_window_title:
+        raise ValueError("Target window title changed before interaction; delivery=not_delivered retry=safe.")
+
+    matches = []
+    for control in window.descendants():
+        try:
+            if control.friendly_class_name() != control_type:
+                continue
+            if not control.is_visible() or not control.is_enabled() or is_password_control(control):
+                continue
+            actual_title = control.window_text().strip()
+            actual_automation_id = getattr(control, 'automation_id', lambda: '')() or ''
+            if control_title is not None and actual_title != control_title:
+                continue
+            if automation_id is not None and actual_automation_id != automation_id:
+                continue
+            matches.append(control)
+        except Exception:
+            continue
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one exact enabled visible {control_type} control, found {len(matches)}; no input was sent."
+        )
+    control = matches[0]
+    return window, control, {
+        "window_handle": handle,
+        "window_title": window.window_text(),
+        "control_type": control.friendly_class_name(),
+        "title": control.window_text().strip(),
+        "automation_id": getattr(control, 'automation_id', lambda: '')() or '',
+    }
+
+def set_control_value(params: Dict[str, Any]) -> Dict[str, Any]:
+    window, control, identity = _exact_value_control_target(params)
+    try:
+        value_pattern = control.iface_value
+        if bool(value_pattern.CurrentIsReadOnly):
+            raise ValueError("Target control is read-only; delivery=not_delivered retry=safe.")
+        current_value = value_pattern.CurrentValue
+    except ValueError:
+        raise
+    except Exception as error:
+        raise RuntimeError(
+            "Target control does not expose a writable UI Automation ValuePattern; no keyboard fallback is permitted."
+        ) from error
+    if current_value != params["expected_value"]:
+        raise ValueError(
+            "Target control value does not match the exact precondition; delivery=not_delivered retry=safe."
+        )
+
+    delivery = "not_dispatched"
+    dispatch_error = None
+    try:
+        delivery = "dispatched"
+        value_pattern.SetValue(params["value"])
+    except Exception as error:
+        dispatch_error = str(error)
+
+    try:
+        _, verified_control, verified_identity = _exact_value_control_target(params)
+        readback = verified_control.iface_value.CurrentValue
+        matches = readback == params["value"]
+    except Exception as error:
+        verified_identity = identity
+        readback = None
+        matches = False
+        if dispatch_error is None:
+            dispatch_error = str(error)
+    return {
+        "outcome": "verified" if matches else "uncertain",
+        "backend": "pywinauto",
+        "target": verified_identity,
+        "delivery": delivery,
+        "readback": readback,
+        "readback_matches": matches,
+        "error": None if matches else (dispatch_error or "UI Automation read-back differed."),
+    }
+
+def read_document_text(params: Dict[str, Any]) -> Dict[str, Any]:
+    window, tab, control, identity = _exact_document_target(params)
+    text, pattern = _read_uia_text(control, int(params.get("max_chars", 16384)))
+    return {
+        "outcome": "verified",
+        "backend": "pywinauto",
+        "target": identity,
+        "read_pattern": pattern,
+        "text": text,
+        "character_count": len(text),
+    }
+
+def write_document_text_verified(params: Dict[str, Any]) -> Dict[str, Any]:
+    window, tab, control, identity = _exact_document_target(params)
+    current_text, read_pattern = _read_uia_text(control)
+    expected_before = params["expected_text"]
+    if current_text != expected_before:
+        raise ValueError(
+            "Target document contents do not match the expected precondition; "
+            "delivery=not_delivered retry=safe."
+        )
+
+    replacement_text = params["text"]
+    delivery = "not_dispatched"
+    method = ""
+    dispatch_error = None
+    try:
+        value_pattern = control.iface_value
+        is_read_only = bool(value_pattern.CurrentIsReadOnly)
+        if not is_read_only:
+            method = "ValuePattern.SetValue"
+            delivery = "dispatched"
+            try:
+                value_pattern.SetValue(replacement_text)
+            except Exception as error:
+                # Once the provider call has started, delivery is uncertain. Never retry
+                # through keyboard input after a potentially partial provider operation.
+                dispatch_error = str(error)
+        else:
+            raise RuntimeError("ValuePattern is read-only.")
+    except Exception:
+        if delivery == "dispatched":
+            raise
+        if any(char in replacement_text for char in "{}^%~+()\t\r\n"):
+            raise ValueError(
+                "Target requires keyboard input and the text contains unsupported key syntax; "
+                "delivery=not_delivered retry=safe."
+            )
+        method = "focused-control type_keys"
+        control.set_focus()
+        if not control.has_keyboard_focus():
+            raise RuntimeError(
+                "The exact editor control did not acquire keyboard focus; "
+                "delivery=not_delivered retry=safe."
+            )
+        if ctypes.windll.user32.GetForegroundWindow() != window.handle:
+            raise RuntimeError(
+                "The target application is not the foreground window; "
+                "delivery=not_delivered retry=safe."
+            )
+        delivery = "dispatched"
+        try:
+            control.type_keys(
+                replacement_text,
+                with_spaces=True,
+                set_foreground=False,
+            )
+        except Exception as error:
+            # A keyboard API exception does not prove that no characters arrived.
+            dispatch_error = str(error)
+
+    # Reacquire the tab and editor after dispatch; never trust the dispatch return value.
+    try:
+        verify_params = dict(params)
+        verify_params["allow_title_change"] = True
+        verify_params["tab_runtime_id"] = identity["tab_runtime_id"]
+        _, _, verified_control, verified_identity = _exact_document_target(verify_params)
+        readback, verified_pattern = _read_uia_text(verified_control)
+        readback_matches = readback == replacement_text
+    except Exception as error:
+        verified_identity = identity
+        readback = None
+        verified_pattern = read_pattern
+        readback_matches = False
+        if dispatch_error is None:
+            dispatch_error = str(error)
+    outcome = "verified" if readback_matches else "uncertain"
+    return {
+        "outcome": outcome,
+        "backend": "pywinauto",
+        "target": verified_identity,
+        "delivery": delivery,
+        "method": method,
+        "read_pattern": verified_pattern or read_pattern,
+        "expected_character_count": len(replacement_text),
+        "actual_character_count": len(readback) if readback is not None else None,
+        "readback_matches": readback_matches,
+        "readback": readback,
+        "error": None if readback_matches else (dispatch_error or "UI Automation read-back differed."),
+    }
+
+
+def close_verified_document(params: Dict[str, Any]) -> Dict[str, Any]:
+    window, tab, control, identity = _exact_document_target(params)
+    text, _ = _read_uia_text(control)
+    if text != params["expected_text"]:
+        raise ValueError("Document content changed; refusing to close or delete it.")
+    close_buttons = [
+        candidate
+        for candidate in window.descendants()
+        if candidate.friendly_class_name() == "Button"
+        and candidate.window_text().strip() == "Close Tab"
+        and candidate.is_visible()
+        and candidate.is_enabled()
+    ]
+    if len(close_buttons) != 1:
+        raise ValueError(
+            f"Expected one active-tab close button, found {len(close_buttons)}; "
+            "leaving the verified document open."
+        )
+    close_buttons[0].invoke()
+    time.sleep(0.1)
+    remaining = [
+        candidate
+        for candidate in get_desktop().windows()
+        if candidate.handle == int(params["handle"])
+        and any(
+            child.friendly_class_name() == "TabItem"
+            and child.window_text().strip() == params["tab_title"]
+            for child in candidate.descendants()
+        )
+    ]
+    if remaining:
+        raise RuntimeError("The verified document tab remained open after close request.")
+    return {"outcome": "verified", "target": identity, "closed": True}
+
+def save_verified_document(params: Dict[str, Any]) -> Dict[str, Any]:
+    window, tab, control, identity = _exact_document_target(params)
+    text, _ = _read_uia_text(control)
+    if text != params["expected_text"]:
+        raise ValueError("Document contents changed; refusing to save an unexpected value.")
+    control.set_focus()
+    if not control.has_keyboard_focus():
+        raise RuntimeError("Exact document editor did not acquire focus; delivery=not_dispatched.")
+    if ctypes.windll.user32.GetForegroundWindow() != window.handle:
+        raise RuntimeError("Target application is not foreground; delivery=not_dispatched.")
+    try:
+        control.type_keys("^s", set_foreground=False)
+    except Exception as error:
+        raise RuntimeError(f"Save shortcut may have been dispatched; outcome=uncertain: {error}") from error
+    return {"outcome": "dispatched", "target": identity, "delivery": "dispatched"}
+
+def open_acceptance_document(params: Dict[str, Any]) -> Dict[str, Any]:
+    file_path = os.path.abspath(params["path"])
+    allowed_root = os.path.realpath(params["allowed_root"])
+    resolved_path = os.path.realpath(file_path)
+    if os.path.commonpath([allowed_root, resolved_path]) != allowed_root:
+        raise ValueError("Acceptance document must be inside the configured temporary directory.")
+    if not os.path.basename(file_path).startswith("jarvis-desktop-acceptance-") or not file_path.lower().endswith(".txt"):
+        raise ValueError("Acceptance document name is outside the dedicated test-file pattern.")
+    if not os.path.isfile(file_path) or os.path.getsize(file_path) != 0:
+        raise ValueError("Acceptance document must already exist and be empty.")
+    process = subprocess.Popen([ALLOWED_APPLICATIONS["notepad"], file_path])
+    return {"opened": True, "pid": process.pid, "path": file_path}
+
 def click_control(params: Dict[str, Any]) -> Dict[str, Any]:
     info = inspect_window(params)
     desktop = get_desktop()
@@ -395,33 +737,21 @@ def click_control(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"clicked": True, "control": ctrl.window_text()}
 
 def type_text(params: Dict[str, Any]) -> Dict[str, Any]:
-    text = params.get("text", "")
-    if not text:
-        return {"typed": True, "length": 0}
-
-    target = resolve_target_window(params)
-    bring_to_foreground(target)
-
-    automation_id = params.get("automation_id")
-    control_title = params.get("control_title")
-    if automation_id or control_title:
-        if target is None:
-            raise ValueError("A target window handle or title is required to type into a control.")
-        if automation_id:
-            ctrl = target.child_window(auto_id=automation_id)
-        else:
-            ctrl = target.child_window(title=control_title)
-        if not ctrl.exists(timeout=3):
-            raise ValueError("Target control not found in window.")
-        if is_password_control(ctrl):
-            raise ValueError(
-                "Security restriction: JARVIS is forbidden from typing into password controls."
-            )
-        ctrl.set_focus()
-
-    # Safe typing with spaces
-    send_keys(text, with_spaces=True)
-    return {"typed": True, "length": len(text)}
+    required = (
+        "handle",
+        "expected_window_title",
+        "tab_title",
+        "control_type",
+        "expected_text",
+        "text",
+    )
+    missing = [name for name in required if name not in params]
+    if missing:
+        raise ValueError(
+            "Window-only or unverified typing is disabled. Required target and verification "
+            f"fields are missing: {', '.join(missing)}. delivery=not_delivered retry=safe."
+        )
+    return write_document_text_verified(params)
 
 def press_key(params: Dict[str, Any]) -> Dict[str, Any]:
     key = params.get("key", "")
@@ -665,6 +995,12 @@ DISPATCH = {
     "inspect_window": inspect_window,
     "focus_window": focus_window,
     "get_controls": get_controls,
+    "set_control_value": set_control_value,
+    "read_document_text": read_document_text,
+    "write_document_text_verified": write_document_text_verified,
+    "close_verified_document": close_verified_document,
+    "save_verified_document": save_verified_document,
+    "open_acceptance_document": open_acceptance_document,
     "click_control": click_control,
     "type_text": type_text,
     "press_key": press_key,

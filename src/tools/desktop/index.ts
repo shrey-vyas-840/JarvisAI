@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AppConfig } from '../../config.js';
 import type { ToolDefinition } from '../../core/tool-registry.js';
 import { DesktopManager } from '../../desktop/desktop-manager.js';
+import type { ApprovalRequest } from '../../security/approval-types.js';
 import { mapImageRectToScreen, toScreenElement, VisionAnalyzer } from '../../vision/index.js';
 
 export interface DesktopToolsOptions {
@@ -207,35 +208,213 @@ export function createDesktopTools(options: DesktopToolsOptions): ToolDefinition
   });
 
   // 6. desktop_type_text
-  const typeTextSchema = z.object({
-    text: z.string().describe('Text to type.'),
-    handle: z.number().int().optional().describe('Window handle to focus before typing.'),
-    title: z.string().optional().describe('Window title to focus before typing.'),
-    automation_id: z.string().optional().describe('Specific control automation ID to target.'),
-    control_title: z.string().optional().describe('Specific control label to target.'),
-  });
+  const typeTextSchema = z
+    .object({
+      text: z.string().describe('Text to type.'),
+      handle: z.number().int().positive().describe('Exact top-level window handle.'),
+      expected_window_title: z.string().min(1).describe('Exact current window title.'),
+      tab_title: z.string().min(1).describe('Exact UI Automation TabItem title to select.'),
+      control_type: z.enum(['Document', 'Edit']).describe('Exact editor control type.'),
+      expected_text: z.string().describe('Exact text that must already be in the editor.'),
+    })
+    .strict();
   tools.push({
     name: 'desktop_type_text',
     description:
-      'Type text into the focused window or control. Password controls are strictly blocked.',
+      'Replace text only in one uniquely identified UI Automation document tab and editor control. Requires an exact window title, exact TabItem title, exact editor control type, and exact expected current text. Selects and verifies the tab, verifies editor focus, writes through a supported UIA control pattern or the focused control, then independently reads back exact text. Never falls back to window-level or foreground typing. Delivery without exact read-back is not success.',
+    permission: 'requires-approval',
+    timeoutMs: 30000,
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to type.' },
+        handle: { type: 'integer', minimum: 1, description: 'Exact top-level window handle.' },
+        expected_window_title: { type: 'string', description: 'Exact current window title.' },
+        tab_title: { type: 'string', description: 'Exact UI Automation TabItem title.' },
+        control_type: { type: 'string', enum: ['Document', 'Edit'] },
+        expected_text: { type: 'string', description: 'Exact expected editor contents.' },
+      },
+      required: [
+        'text',
+        'handle',
+        'expected_window_title',
+        'tab_title',
+        'control_type',
+        'expected_text',
+      ],
+    },
+    argumentsSchema: typeTextSchema,
+    approvalRequest: (rawArgs: unknown): ApprovalRequest => {
+      const args = typeTextSchema.parse(rawArgs);
+      return {
+        toolName: 'desktop_type_text',
+        operation: 'Write verified text to one desktop document',
+        action: `Write ${String(args.text.length)} characters to the exact UIA tab "${args.tab_title}" in "${args.expected_window_title}".`,
+        warning:
+          'The action is limited to the uniquely identified document tab and will proceed only if the editor currently contains the exact expected text. JARVIS reads the editor back before reporting success.',
+      };
+    },
+    execute: async (rawArgs: unknown) => {
+      const args = typeTextSchema.parse(rawArgs);
+      return desktop.typeText(args);
+    },
+    verify: (rawArgs: unknown, output) => {
+      const args = typeTextSchema.safeParse(rawArgs);
+      return (
+        args.success &&
+        typeof output === 'object' &&
+        output !== null &&
+        'outcome' in output &&
+        output.outcome === 'verified' &&
+        'readback_matches' in output &&
+        output.readback_matches === true &&
+        'readback' in output &&
+        output.readback === args.data.text
+      );
+    },
+  });
+
+  const setControlValueSchema = z
+    .object({
+      handle: z.number().int().positive(),
+      expected_window_title: z.string().min(1),
+      control_type: z.string().min(1),
+      expected_value: z.string(),
+      value: z.string(),
+      control_title: z.string().min(1).optional(),
+      automation_id: z.string().min(1).optional(),
+    })
+    .strict()
+    .refine((args) => args.control_title !== undefined || args.automation_id !== undefined, {
+      message: 'Provide control_title or automation_id to identify one exact control.',
+    });
+  tools.push({
+    name: 'desktop_set_control_value',
+    description:
+      'Set a value only on one uniquely identified native UI Automation control. Requires an exact target window identity, control type, stable title or automation ID, and exact expected pre-action value. Uses UIA ValuePattern and independently reads the value back; it never falls back to foreground keyboard typing.',
+    permission: 'requires-approval',
+    timeoutMs: 30000,
+    parameters: {
+      type: 'object',
+      properties: {
+        handle: { type: 'integer', minimum: 1 },
+        expected_window_title: { type: 'string' },
+        control_type: { type: 'string' },
+        expected_value: { type: 'string' },
+        value: { type: 'string' },
+        control_title: { type: 'string' },
+        automation_id: { type: 'string' },
+      },
+      required: ['handle', 'expected_window_title', 'control_type', 'expected_value', 'value'],
+    },
+    argumentsSchema: setControlValueSchema,
+    approvalRequest: (rawArgs: unknown): ApprovalRequest => {
+      const args = setControlValueSchema.parse(rawArgs);
+      return {
+        toolName: 'desktop_set_control_value',
+        operation: 'Set one verified desktop control value',
+        action: `Set one ${args.control_type} control in "${args.expected_window_title}" after its current value matches the supplied precondition.`,
+        warning:
+          'JARVIS will refuse ambiguous, stale, password, or changed targets and will read the target value back after delivery.',
+      };
+    },
+    execute: (rawArgs: unknown) => desktop.setControlValue(setControlValueSchema.parse(rawArgs)),
+    verify: (_args, output) =>
+      typeof output === 'object' &&
+      output !== null &&
+      'outcome' in output &&
+      output.outcome === 'verified' &&
+      'readback_matches' in output &&
+      output.readback_matches === true,
+  });
+
+  const documentReadSchema = z
+    .object({
+      handle: z.number().int().positive(),
+      expected_window_title: z.string().min(1),
+      tab_title: z.string().min(1),
+      control_type: z.enum(['Document', 'Edit']),
+      max_chars: z.number().int().min(1).max(16384).optional(),
+    })
+    .strict();
+  tools.push({
+    name: 'desktop_read_document_text',
+    description:
+      'Read text from exactly one UI Automation document tab/editor. Requires the exact window handle and title, TabItem title, and editor control type; fails if any target is ambiguous or changed.',
     permission: 'read-only',
     timeoutMs: 15000,
     parameters: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Text to type.' },
-        handle: { type: 'integer', description: 'Window handle.' },
-        title: { type: 'string', description: 'Window title.' },
-        automation_id: { type: 'string', description: 'Automation ID.' },
-        control_title: { type: 'string', description: 'Control label.' },
+        handle: { type: 'integer', minimum: 1 },
+        expected_window_title: { type: 'string' },
+        tab_title: { type: 'string' },
+        control_type: { type: 'string', enum: ['Document', 'Edit'] },
+        max_chars: { type: 'integer', minimum: 1, maximum: 16384 },
       },
-      required: ['text'],
+      required: ['handle', 'expected_window_title', 'tab_title', 'control_type'],
     },
-    argumentsSchema: typeTextSchema,
-    execute: async (rawArgs: unknown) => {
-      const args = typeTextSchema.parse(rawArgs);
-      return desktop.typeText(args);
+    argumentsSchema: documentReadSchema,
+    execute: (rawArgs: unknown) => {
+      const args = documentReadSchema.parse(rawArgs);
+      return desktop.readDocumentText(args);
     },
+    verify: (_args, output) =>
+      typeof output === 'object' &&
+      output !== null &&
+      'outcome' in output &&
+      output.outcome === 'verified' &&
+      'text' in output &&
+      typeof output.text === 'string',
+  });
+
+  const closeDocumentSchema = z
+    .object({
+      handle: z.number().int().positive(),
+      expected_window_title: z.string().min(1),
+      tab_title: z.string().min(1),
+      control_type: z.enum(['Document', 'Edit']),
+      expected_text: z.string(),
+    })
+    .strict();
+  tools.push({
+    name: 'desktop_close_verified_document',
+    description:
+      'Close only the exact selected UI Automation document tab after confirming its contents match the expected text. Fails closed if the target changed or is ambiguous.',
+    permission: 'requires-approval',
+    timeoutMs: 15000,
+    parameters: {
+      type: 'object',
+      properties: {
+        handle: { type: 'integer', minimum: 1 },
+        expected_window_title: { type: 'string' },
+        tab_title: { type: 'string' },
+        control_type: { type: 'string', enum: ['Document', 'Edit'] },
+        expected_text: { type: 'string' },
+      },
+      required: ['handle', 'expected_window_title', 'tab_title', 'control_type', 'expected_text'],
+    },
+    argumentsSchema: closeDocumentSchema,
+    approvalRequest: (rawArgs: unknown): ApprovalRequest => {
+      const args = closeDocumentSchema.parse(rawArgs);
+      return {
+        toolName: 'desktop_close_verified_document',
+        operation: 'Close one verified desktop document tab',
+        action: `Close the exact tab "${args.tab_title}" after its content matches the expected test text.`,
+        warning: 'Only the exact identified test tab may be closed; other tabs remain untouched.',
+      };
+    },
+    execute: (rawArgs: unknown) => {
+      const args = closeDocumentSchema.parse(rawArgs);
+      return desktop.closeVerifiedDocument(args);
+    },
+    verify: (_args, output) =>
+      typeof output === 'object' &&
+      output !== null &&
+      'outcome' in output &&
+      output.outcome === 'verified' &&
+      'closed' in output &&
+      output.closed === true,
   });
 
   // 7. desktop_press_key
@@ -442,9 +621,9 @@ export function createDesktopTools(options: DesktopToolsOptions): ToolDefinition
   // 13. desktop_launch_application
   const launchAppSchema = z.object({
     name: z
-      .enum(['notepad', 'calc', 'calculator', 'explorer'])
+      .enum(['notepad', 'calc', 'calculator', 'explorer', 'excel'])
       .describe(
-        'Application to launch from the approved allowlist (notepad, calculator, explorer).',
+        'Application to launch from the approved allowlist (notepad, calculator, explorer, excel).',
       ),
   });
   tools.push({
@@ -458,7 +637,7 @@ export function createDesktopTools(options: DesktopToolsOptions): ToolDefinition
       properties: {
         name: {
           type: 'string',
-          enum: ['notepad', 'calc', 'calculator', 'explorer'],
+          enum: ['notepad', 'calc', 'calculator', 'explorer', 'excel'],
           description: 'Approved application name.',
         },
       },

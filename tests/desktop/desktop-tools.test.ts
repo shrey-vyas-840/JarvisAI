@@ -48,13 +48,13 @@ describe('Windows Desktop Automation Tools', () => {
       .mockResolvedValue({ launched: true, application: 'notepad', pid: 1234 }),
   };
 
-  it('registers all 17 desktop automation tools', () => {
+  it('registers desktop tools including verified document targeting and read-back', () => {
     const tools = createDesktopTools({
       desktopManager: mockDesktopManager as DesktopManager,
       config: mockConfig,
     });
 
-    expect(tools.length).toBe(17);
+    expect(tools.length).toBe(20);
     const names = new Set(tools.map((t) => t.name));
 
     expect(names.has('desktop_get_screen_info')).toBe(true);
@@ -67,6 +67,9 @@ describe('Windows Desktop Automation Tools', () => {
     expect(names.has('desktop_get_controls')).toBe(true);
     expect(names.has('desktop_click_control')).toBe(true);
     expect(names.has('desktop_type_text')).toBe(true);
+    expect(names.has('desktop_set_control_value')).toBe(true);
+    expect(names.has('desktop_read_document_text')).toBe(true);
+    expect(names.has('desktop_close_verified_document')).toBe(true);
     expect(names.has('desktop_press_key')).toBe(true);
     expect(names.has('desktop_scroll')).toBe(true);
     expect(names.has('desktop_mouse_click')).toBe(true);
@@ -74,6 +77,53 @@ describe('Windows Desktop Automation Tools', () => {
     expect(names.has('desktop_mouse_drag')).toBe(true);
     expect(names.has('desktop_capture_screenshot')).toBe(true);
     expect(names.has('desktop_launch_application')).toBe(true);
+  });
+
+  it('requires tab and editor identity plus exact preconditions for desktop text input', async () => {
+    const typeText = vi.fn().mockResolvedValue({
+      outcome: 'verified',
+      backend: 'pywinauto',
+      target: {
+        window_handle: 12345,
+        window_title: 'jarvis-test.txt - Notepad',
+        tab_title: 'jarvis-test.txt. Unmodified.',
+        control_type: 'Document',
+        automation_id: '',
+        runtime_id: [1, 2, 3],
+      },
+      delivery: 'dispatched',
+      method: 'ValuePattern.SetValue',
+      read_pattern: 'TextPattern',
+      expected_character_count: 5,
+      actual_character_count: 5,
+      readback_matches: true,
+      readback: 'hello',
+      error: null,
+    });
+    const tool = createDesktopTools({
+      desktopManager: { typeText } as unknown as DesktopManager,
+      config: mockConfig,
+    }).find((candidate) => candidate.name === 'desktop_type_text');
+    expect(tool).toBeDefined();
+    if (!tool) return;
+
+    const args = {
+      text: 'hello',
+      handle: 12345,
+      expected_window_title: 'jarvis-test.txt - Notepad',
+      tab_title: 'jarvis-test.txt. Unmodified.',
+      control_type: 'Document',
+      expected_text: '',
+    };
+    const context = {} as ToolExecutionContext;
+    const output = await tool.execute(args, context);
+
+    expect(tool.permission).toBe('requires-approval');
+    expect(typeText).toHaveBeenCalledWith(args);
+    expect(tool.verify?.(args, output, context)).toBe(true);
+    expect(tool.verify?.(args, { outcome: 'uncertain' }, context)).toBe(false);
+
+    await expect(tool.execute({ text: 'unsafe window-only text' }, context)).rejects.toThrow();
   });
 
   it('maps vision candidates to physical screen coordinates before clicking', async () => {
@@ -154,5 +204,38 @@ describe('Windows Desktop Automation Tools', () => {
     // Disallowed application throws schema validation error
     await expect(launchTool.execute({ name: 'cmd.exe' }, fakeContext)).rejects.toThrow();
     await expect(launchTool.execute({ name: 'powershell' }, fakeContext)).rejects.toThrow();
+  });
+
+  it('sets one identified UI Automation value only after an exact precondition and read-back', async () => {
+    const setControlValue = vi.fn().mockResolvedValue({
+      outcome: 'verified',
+      delivery: 'dispatched',
+      readback: 'verified value',
+      readback_matches: true,
+      error: null,
+    });
+    const tool = createDesktopTools({
+      desktopManager: { setControlValue } as unknown as DesktopManager,
+      config: mockConfig,
+    }).find((candidate) => candidate.name === 'desktop_set_control_value');
+    expect(tool).toBeDefined();
+    if (!tool) return;
+
+    const args = {
+      handle: 12345,
+      expected_window_title: 'A verified application',
+      control_type: 'Edit',
+      control_title: 'Name',
+      expected_value: '',
+      value: 'verified value',
+    };
+    const context = {} as ToolExecutionContext;
+    const output = await tool.execute(args, context);
+
+    expect(setControlValue).toHaveBeenCalledWith(args);
+    expect(tool.verify?.(args, output, context)).toBe(true);
+    expect(() =>
+      tool.execute({ ...args, control_title: undefined, automation_id: undefined }, context),
+    ).toThrow('control_title or automation_id');
   });
 });
