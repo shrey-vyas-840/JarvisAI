@@ -1,0 +1,152 @@
+diff --git a/node_modules/playwriter/src/cdp-relay.ts b/node_modules/playwriter/src/cdp-relay.ts
+index fd99f9e..c85c0e3 100644
+--- a/node_modules/playwriter/src/cdp-relay.ts
++++ b/node_modules/playwriter/src/cdp-relay.ts
+@@ -125,6 +125,32 @@ export async function startPlayWriterCDPRelayServer({
+   const relayInstanceId = crypto.randomUUID()
+   const ownershipKey = (sessionId: string) => `${relayInstanceId}:${sessionId}`
+ 
++  // Track pending Runtime.enable handlers by CLI session ID to enable cleanup on session deletion.
++  // Each entry holds the handler reference and its timeout handle for idempotent cancellation.
++  const pendingRuntimeEnableHandlers = new Map<string, Set<{
++    handler: (data: { event: CDPEventBase }) => void
++    timeout: ReturnType<typeof setTimeout>
++    resolve: (value: void | PromiseLike<void>) => void
++    resolved: boolean
++  }>>()
++
++  // Cancel all pending Runtime.enable handlers for a given CLI session ID.
++  // Safe to call multiple times; idempotent.
++  function cancelPendingRuntimeEnableHandlers(sessionId: string): void {
++    const entries = pendingRuntimeEnableHandlers.get(sessionId)
++    if (!entries) return
++    for (const entry of entries) {
++      clearTimeout(entry.timeout)
++      emitter.off('cdp:event', entry.handler)
++      // Resolve the pending promise to avoid unhandled rejection (only if not already resolved)
++      if (!entry.resolved) {
++        entry.resolved = true
++        try { entry.resolve() } catch {}
++      }
++    }
++    pendingRuntimeEnableHandlers.delete(sessionId)
++  }
++
+   const resolvedCdpLogger = cdpLogger || createCdpLogger()
+   const logCdpJson = (entry: CdpLogEntry) => {
+     resolvedCdpLogger.log(entry)
+@@ -852,6 +878,9 @@ export async function startPlayWriterCDPRelayServer({
+           break
+         }
+ 
++        // Get the CLI session ID for tracking this handler's lifecycle
++        const cliSessionId = client?.sessionId
++
+         const contextCreatedPromise = new Promise<void>((resolve) => {
+           const handler = ({ event }: { event: CDPEventBase }) => {
+             if (event.method === 'Runtime.executionContextCreated' && event.sessionId === sessionId) {
+@@ -859,6 +888,22 @@ export async function startPlayWriterCDPRelayServer({
+               if (params?.context?.auxData?.isDefault === true) {
+                 clearTimeout(timeout)
+                 emitter.off('cdp:event', handler)
++                // Remove from tracking on successful completion
++                if (cliSessionId) {
++                  const entries = pendingRuntimeEnableHandlers.get(cliSessionId)
++                  if (entries) {
++                    for (const entry of entries) {
++                      if (entry.handler === handler) {
++                        if (!entry.resolved) {
++                          entry.resolved = true
++                        }
++                        entries.delete(entry)
++                        break
++                      }
++                    }
++                    if (entries.size === 0) pendingRuntimeEnableHandlers.delete(cliSessionId)
++                  }
++                }
+                 resolve()
+               }
+             }
+@@ -870,8 +915,32 @@ export async function startPlayWriterCDPRelayServer({
+                 `IMPORTANT: Runtime.enable timed out waiting for main frame executionContextCreated (sessionId: ${sessionId}). This may cause pages to not be visible immediately.`,
+               ),
+             )
++            // Remove from tracking on timeout
++            if (cliSessionId) {
++              const entries = pendingRuntimeEnableHandlers.get(cliSessionId)
++              if (entries) {
++                for (const entry of entries) {
++                  if (entry.handler === handler) {
++                    if (!entry.resolved) {
++                      entry.resolved = true
++                    }
++                    entries.delete(entry)
++                    break
++                  }
++                }
++                if (entries.size === 0) pendingRuntimeEnableHandlers.delete(cliSessionId)
++              }
++            }
+             resolve()
+           }, 3000)
++
++          // Track this handler for session-scoped cleanup
++          if (cliSessionId) {
++            const entries = pendingRuntimeEnableHandlers.get(cliSessionId) || new Set()
++            entries.add({ handler, timeout, resolve, resolved: false })
++            pendingRuntimeEnableHandlers.set(cliSessionId, entries)
++          }
++
+           emitter.on('cdp:event', handler)
+         })
+ 
+@@ -1418,6 +1487,11 @@ export async function startPlayWriterCDPRelayServer({
+         },
+ 
+         onClose() {
++          // Cancel any pending Runtime.enable handlers for this client's session
++          const client = store.getState().playwrightClients.get(clientId)
++          if (client?.sessionId) {
++            cancelPendingRuntimeEnableHandlers(client.sessionId)
++          }
+           releaseClientScreencasts(clientId)
+           store.setState((s) => relayState.removePlaywrightClient(s, { clientId }))
+           logger?.log(pc.yellow(`Playwright client disconnected: ${clientId} (${store.getState().playwrightClients.size} remaining)`))
+@@ -2481,6 +2555,7 @@ export async function startPlayWriterCDPRelayServer({
+         await executor.reset()
+       } catch (error) {
+         await manager.deleteExecutor(sessionId)
++        cancelPendingRuntimeEnableHandlers(sessionId)
+         return c.json({ error: error instanceof Error ? error.message : String(error) }, 500)
+       }
+       const metadata = executor.getSessionMetadata()
+@@ -2799,6 +2874,9 @@ export async function startPlayWriterCDPRelayServer({
+ 
+       const deleted = await manager.deleteExecutor(sessionId)
+ 
++      // Cancel any pending Runtime.enable handlers for this session
++      cancelPendingRuntimeEnableHandlers(sessionId)
++
+       if (!deleted) {
+         return c.json({ error: `Session ${sessionId} not found` }, 404)
+       }
+@@ -3145,6 +3223,7 @@ export async function startPlayWriterCDPRelayServer({
+         const shouldStopVm = !hasOtherCloudReferences(sessionId, tracking.cloudSessionId)
+         cloudSessionTracking.delete(sessionId)
+         await executorManager?.deleteExecutor(sessionId)
++        cancelPendingRuntimeEnableHandlers(sessionId)
+         if (shouldStopVm) {
+           disconnectCloudVm(tracking)
+         }
+@@ -3215,6 +3294,10 @@ export async function startPlayWriterCDPRelayServer({
+       cloudSessionTracking.clear()
+       persistCloudSessions() // Remove the file on graceful shutdown
+       server.close()
++      // Cancel all pending Runtime.enable handlers for all sessions
++      for (const sessionId of pendingRuntimeEnableHandlers.keys()) {
++        cancelPendingRuntimeEnableHandlers(sessionId)
++      }
+       emitter.removeAllListeners()
+     },
+     on<K extends keyof RelayServerEvents>(event: K, listener: RelayServerEvents[K]) {
