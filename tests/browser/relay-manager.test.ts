@@ -1,6 +1,7 @@
 import { EventEmitter, Readable } from 'node:stream';
 import http from 'node:http';
-import { describe, it, expect, vi } from 'vitest';
+import net from 'node:net';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import { RelayManager } from '../../src/browser/relay-manager.js';
 
@@ -43,7 +44,44 @@ function mockRelay(routes: Record<string, MockRoute>) {
   });
 }
 
+function createMockSocket(shouldConnect: boolean): net.Socket {
+  const socket = new EventEmitter() as unknown as net.Socket;
+  socket.setTimeout = vi.fn();
+  socket.destroy = vi.fn();
+  socket.connect = vi.fn();
+
+  setTimeout(() => {
+    if (shouldConnect) {
+      socket.emit('connect');
+    } else {
+      socket.emit('error', new Error('ECONNREFUSED'));
+    }
+  }, 1);
+
+  return socket;
+}
+
+function mockNetConnect(shouldConnect: boolean) {
+  return (
+    vi
+      .spyOn(net, 'connect')
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      .mockImplementation((_options: unknown, _connectionListener?: unknown) => {
+        return createMockSocket(shouldConnect);
+      })
+  );
+}
+
 describe('RelayManager', () => {
+  let netConnectSpy: ReturnType<typeof mockNetConnect> | undefined;
+
+  afterEach(() => {
+    if (netConnectSpy) {
+      netConnectSpy.mockRestore();
+      netConnectSpy = undefined;
+    }
+  });
+
   it('strictly enforces loopback host', () => {
     expect(() => new RelayManager({ host: '0.0.0.0' })).toThrow(/Security violation/);
     expect(() => new RelayManager({ host: '192.168.1.5' })).toThrow(/Security violation/);
@@ -54,6 +92,7 @@ describe('RelayManager', () => {
   });
 
   it('reports offline status when port is not listening', async () => {
+    netConnectSpy = mockNetConnect(false);
     const manager = new RelayManager({ port: 59991 });
     const status = await manager.getStatus();
 
@@ -65,6 +104,7 @@ describe('RelayManager', () => {
   });
 
   it('parses wrapped /extensions/status payloads', async () => {
+    netConnectSpy = mockNetConnect(true);
     const getSpy = mockRelay({
       '/version': { body: JSON.stringify({ version: '0.9.0' }) },
       '/extensions/status': {
@@ -103,6 +143,7 @@ describe('RelayManager', () => {
   });
 
   it('falls back to /extension/status when /extensions/status is unavailable', async () => {
+    netConnectSpy = mockNetConnect(true);
     const getSpy = mockRelay({
       '/version': { body: JSON.stringify({ version: '0.9.0' }) },
       '/extension/status': {
@@ -129,6 +170,7 @@ describe('RelayManager', () => {
   });
 
   it('reports unknown extension count instead of zero when inventory fails', async () => {
+    netConnectSpy = mockNetConnect(true);
     const getSpy = mockRelay({
       '/version': { body: JSON.stringify({ version: '0.9.0' }) },
       '/extensions/status': { status: 500 },
@@ -148,6 +190,7 @@ describe('RelayManager', () => {
   });
 
   it('accepts a bare extension array from the relay', async () => {
+    netConnectSpy = mockNetConnect(true);
     const getSpy = mockRelay({
       '/version': { body: JSON.stringify({ version: '0.9.0' }) },
       '/extensions/status': {
