@@ -18,7 +18,7 @@ Last updated: 2026-11-13
 - Current `npm run typecheck` and `npm run build` pass. ESLint passes for `src/cli.ts`, `src/browser`, `src/logging`, and the new Playwriter process-manager test.
 - The RelayStatus errors came from three new dynamic import type references pointing at `relay-manager.js`; `browser-manager.ts` now refers directly to the single definition in `browser/types.ts`. The browser barrel again exports `types.ts`.
 - Playwriter stdout/stderr redirection now passes numeric descriptors from `openSync` to `spawn` and closes both parent descriptors. Logger consumers share the four-method `LoggerLike` shape.
-- Full lint, formatting, and test gates remain blocked by existing orchestration lint/style findings, a missing `milestone3-demo.ts` file referenced by ESLint, and the desktop-windows CLI test failing in this environment. See `issue.md` for the error ledger and exact command results.
+- Full lint, formatting, and test gates remain blocked by existing orchestration lint/style findings, a missing `milestone3-demo.ts` file referenced by ESLint, and the desktop-windows CLI test failing in this environment. See `docs/issue.md` for the error ledger and exact command results.
 - Runtime: CLI help/version passed; JARVIS status and browser status report Ollama READY, Playwriter 0.9.0 with one connected Chrome extension, and browser READY. Agent Desktop reported NOT READY. `start` reused the externally owned relay and did not claim full JARVIS readiness; `stop` correctly left that external relay running.
 
 ## Current position

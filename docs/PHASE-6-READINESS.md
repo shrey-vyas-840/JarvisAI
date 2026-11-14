@@ -34,7 +34,7 @@ Statuses: `IMPLEMENTED` means code exists; `AUTOMATED_TESTED` means automated co
 
 ## VS Code ESLint discrepancy
 
-VS Code reports three `@typescript-eslint/no-unsafe-call` diagnostics at `src/cli.ts` calls to `await browser.dispose()`. Fresh local ESLint (10.14.0 from this repository) reports none; `browser` is constructed from `BrowserManager`, whose `dispose(): Promise<void>` declaration is in `src/browser/browser-manager.ts`. The extension Output channel/configuration/project association could not be inspected from this session, so the editor-side cause and resolution are unknown. Do not call these diagnostics stale. See the current issue ledger in `issue.md` for the exact evidence needed from VS Code.
+VS Code reports three `@typescript-eslint/no-unsafe-call` diagnostics at `src/cli.ts` calls to `await browser.dispose()`. Fresh local ESLint (10.14.0 from this repository) reports none; `browser` is constructed from `BrowserManager`, whose `dispose(): Promise<void>` declaration is in `src/browser/browser-manager.ts`. The extension Output channel/configuration/project association could not be inspected from this session, so the editor-side cause and resolution are unknown. Do not call these diagnostics stale. See the current issue ledger in `docs/issue.md` for the exact evidence needed from VS Code.
 
 ## Multi-application acceptance
 
