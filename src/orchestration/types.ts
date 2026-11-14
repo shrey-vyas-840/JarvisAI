@@ -4,7 +4,7 @@ export type PlanState =
 export type StepState =
   'PENDING' | 'RUNNING' | 'WAITING_VERIFICATION' | 'VERIFIED' | 'FAILED' | 'SKIPPED';
 
-export type BackendName = 'playwriter' | 'agent-desktop' | 'pywinauto' | 'vision';
+export type BackendName = 'playwriter' | 'agent-desktop' | 'pywinauto' | 'vision' | 'local';
 
 export interface Step {
   readonly id: string;

@@ -69,8 +69,12 @@ export class DesktopBackendSelector {
     ]);
     const selection = chooseBackend(agentProbe, pywinautoProbe, this.isoNow(), agentDesktopStatus);
 
-    this.cached = selection;
-    this.cachedAt = current;
+    // Cache only a fully healthy comparison. A failed accessibility probe can be
+    // transient (for example, a provider startup/DACL hiccup), so the next caller
+    // must be able to observe recovery without waiting for the success TTL.
+    const allBackendsHealthy = selection.probes.every((probe) => probe.available);
+    this.cached = allBackendsHealthy ? selection : null;
+    this.cachedAt = allBackendsHealthy ? current : 0;
 
     return selection;
   }
@@ -92,8 +96,12 @@ export class DesktopBackendSelector {
       const listLatencyMs = Math.round(this.now() - started);
       const focused = windows.find((window) => window.is_focused);
       let treeLatencyMs: number | null = null;
+      let accessibilityError: string | null = null;
 
-      if (focused !== undefined) {
+      if (focused === undefined) {
+        accessibilityError =
+          'No focused window was available for the accessibility snapshot probe.';
+      } else {
         const treeStarted = this.now();
 
         try {
@@ -108,19 +116,20 @@ export class DesktopBackendSelector {
             'Agent Desktop accessibility-tree probe timed out',
           );
           treeLatencyMs = Math.round(this.now() - treeStarted);
-        } catch {
+        } catch (error) {
           treeLatencyMs = null;
+          accessibilityError = `Accessibility snapshot probe failed: ${formatError(error)}`;
         }
       }
 
       return {
         backend: 'agent-desktop',
-        available: true,
+        available: treeLatencyMs !== null,
         latencyMs: listLatencyMs,
         treeLatencyMs,
         windowCount: windows.length,
         focusedTitle: focused?.title ?? null,
-        error: null,
+        error: accessibilityError,
       };
     } catch (error) {
       return {
@@ -154,6 +163,7 @@ export class DesktopBackendSelector {
             window.class_name !== 'Progman',
         );
       let treeLatencyMs: number | null = null;
+      let accessibilityError: string | null = null;
 
       if (target !== undefined) {
         const treeStarted = this.now();
@@ -165,19 +175,23 @@ export class DesktopBackendSelector {
             'pywinauto accessibility-tree probe timed out',
           );
           treeLatencyMs = Math.round(this.now() - treeStarted);
-        } catch {
+        } catch (error) {
           treeLatencyMs = null;
+          accessibilityError = `Accessibility control probe failed: ${formatError(error)}`;
         }
+      } else {
+        accessibilityError =
+          'No application window was available for the UI Automation control probe.';
       }
 
       return {
         backend: 'pywinauto',
-        available: true,
+        available: treeLatencyMs !== null,
         latencyMs: listLatencyMs,
         treeLatencyMs,
         windowCount: windows.length,
         focusedTitle: target?.title ?? null,
-        error: null,
+        error: accessibilityError,
       };
     } catch (error) {
       return {

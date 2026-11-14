@@ -75,10 +75,15 @@ export class BackendRouter {
       available: playwriterAvail,
       latencyMs: playwriterAvail ? 0 : null,
       supports: [
+        'browser_connect_profile',
+        'browser_new_tab',
         'browser_navigate',
         'browser_click',
         'browser_fill_field',
         'browser_get_page_snapshot',
+        'browser_get_page_url',
+        'browser_get_page_title',
+        'browser_get_page_text',
         'browser_list_extensions',
         'browser_vision_locate',
         'browser_wait',
@@ -119,6 +124,8 @@ export class BackendRouter {
           'desktop_get_controls',
           'desktop_click_control',
           'desktop_type_text',
+          'desktop_read_document_text',
+          'desktop_close_verified_document',
           'desktop_press_key',
           'desktop_wait_for_window',
           'desktop_focus_window',
@@ -136,8 +143,11 @@ export class BackendRouter {
       scope: 'vision',
     });
 
-    this.cachedCapabilities = capabilities;
-    this.cachedAt = now;
+    const desktopProbeFailed =
+      this.desktopSelector !== undefined &&
+      capabilities.some((capability) => capability.scope === 'desktop' && !capability.available);
+    this.cachedCapabilities = desktopProbeFailed ? null : capabilities;
+    this.cachedAt = desktopProbeFailed ? 0 : now;
     return capabilities;
   }
 
@@ -154,7 +164,7 @@ export class BackendRouter {
       if (preferredScope && c.scope !== preferredScope && c.scope !== 'hybrid') {
         return false;
       }
-      return requiredTools.every((tool) => c.supports.includes(tool));
+      return requiredTools.every((tool) => this.backendSupportsTool(c, tool));
     });
 
     if (candidates.length === 0) {
@@ -200,7 +210,7 @@ export class BackendRouter {
       toolName,
       capabilities: capabilities.map((c) => c.name),
     });
-    return 'playwriter';
+    return 'local';
   }
 
   public invalidateCache(): void {
@@ -217,6 +227,16 @@ export class BackendRouter {
       return this.playwriterAvailable();
     }
   }
+
+  private backendSupportsTool(capability: BackendCapabilities, toolName: string): boolean {
+    if (capability.supports.includes(toolName)) return true;
+    if (capability.name === 'playwriter') return toolName.startsWith('browser_');
+    if (capability.name === 'agent-desktop') return toolName.startsWith('desktop_ax_');
+    if (capability.name === 'pywinauto') {
+      return toolName.startsWith('desktop_') && !toolName.startsWith('desktop_ax_');
+    }
+    return capability.name === 'vision' && toolName.includes('vision');
+  }
 }
 
 export function inferBackendFromTool(toolName: string): BackendName {
@@ -229,7 +249,10 @@ export function inferBackendFromTool(toolName: string): BackendName {
   if (toolName.startsWith('desktop_') && !toolName.startsWith('desktop_vision')) {
     return 'pywinauto';
   }
-  return 'vision';
+  if (toolName.startsWith('desktop_vision') || toolName.startsWith('browser_vision')) {
+    return 'vision';
+  }
+  return 'local';
 }
 
 export function getBackendForStep(step: { tool: string; backend?: BackendName }): BackendName {

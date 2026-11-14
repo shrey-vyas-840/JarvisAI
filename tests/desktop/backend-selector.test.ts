@@ -123,6 +123,60 @@ describe('DesktopBackendSelector', () => {
     });
   });
 
+  it('does not advertise Agent Desktop as available when its accessibility snapshot fails', async () => {
+    const { selector } = createSelector({
+      agentWindows: () => Promise.resolve(windows),
+      agentSnapshot: () => Promise.reject(new Error('private file DACL denied access')),
+      pywinautoWindows: () => Promise.resolve(windows),
+      pywinautoControls: () => Promise.resolve([{ control_type: 'Document' }]),
+    });
+
+    const result = await selector.select({ force: true });
+
+    expect(result.selected).toBe('pywinauto');
+    expect(result.probes[0]).toMatchObject({
+      backend: 'agent-desktop',
+      available: false,
+      treeLatencyMs: null,
+      error: 'Accessibility snapshot probe failed: private file DACL denied access',
+    });
+    expect(typeof result.probes[0]?.latencyMs).toBe('number');
+    expect(result.probes[1]?.available).toBe(true);
+  });
+
+  it('re-probes after an accessibility snapshot failure instead of caching the failure', async () => {
+    const snapshot = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('transient provider failure'))
+      .mockResolvedValueOnce({ snapshot_id: 'recovered', tree: { role: 'window' } });
+    const { selector } = createSelector({ agentSnapshot: snapshot });
+
+    const failed = await selector.select();
+    const recovered = await selector.select();
+
+    expect(failed.probes[0]?.available).toBe(false);
+    expect(recovered.probes[0]?.available).toBe(true);
+    expect(snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('records why pywinauto control probing failed and can recover on the next probe', async () => {
+    const controls = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('UIA provider busy'))
+      .mockResolvedValueOnce([{ control_type: 'Document' }]);
+    const { selector } = createSelector({ pywinautoControls: controls });
+
+    const failed = await selector.select();
+    const recovered = await selector.select();
+
+    expect(failed.probes[1]).toMatchObject({
+      available: false,
+      error: 'Accessibility control probe failed: UIA provider busy',
+    });
+    expect(recovered.probes[1]?.available).toBe(true);
+    expect(controls).toHaveBeenCalledTimes(2);
+  });
+
   it('reports no reliable backend when both probes fail', async () => {
     const { selector } = createSelector({
       agentWindows: () => Promise.reject(new Error('agent unavailable')),

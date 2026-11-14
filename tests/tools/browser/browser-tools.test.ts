@@ -198,4 +198,91 @@ describe('Browser Tools Registration and Security Policies', () => {
     expect(result.viewportCoordinates).toEqual({ x: 440, y: 330 });
     expect(clicks).toEqual([[440, 330]]);
   });
+
+  it('targets navigation and page read-back using the stable JARVIS tab ID', async () => {
+    const targetedIds: string[] = [];
+    const page = {
+      url: () => 'https://example.com/',
+      title: () => Promise.resolve('Example Domain'),
+      innerText: () => Promise.resolve('Example Domain body text'),
+    };
+    const manager = {
+      connect: () =>
+        Promise.resolve({
+          id: 'profile-1',
+          browser: 'chrome',
+          email: null,
+          activeTabs: 2,
+          playwriterVersion: '0.9.0',
+        }),
+      getSessionId: () => 'session-1',
+      getReadiness: () =>
+        Promise.resolve({
+          relayRunning: true,
+          relayListening: true,
+          relayVersion: '0.9.0',
+          extensionCount: 1,
+          selectedBrowserId: 'profile-1',
+          enabledTabs: 2,
+          responsiveTabs: 2,
+          sessionReady: true,
+          lastSuccessfulOperation: null,
+          lastError: null,
+          recoveryAttempts: 0,
+        }),
+      newTab: () =>
+        Promise.resolve({
+          index: 2,
+          id: 'jarvis-tab-stable',
+          title: '',
+          url: 'about:blank',
+          isJarvisOwned: true,
+          isCurrent: true,
+          responsive: true,
+          titleError: null,
+        }),
+      navigate: (url: string, tabId?: string) => {
+        targetedIds.push(`navigate:${tabId ?? 'active'}`);
+        return Promise.resolve({ url, title: 'Example Domain', recovered: false });
+      },
+      getPageById: (tabId: string) => {
+        targetedIds.push(`read:${tabId}`);
+        return page;
+      },
+      getActivePage: () => page,
+    } as unknown as BrowserManager;
+    const tools = createBrowserTools({ browserManager: manager, config: mockConfig });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const newTabTool = byName.get('browser_new_tab');
+    const navigateTool = byName.get('browser_navigate');
+    const urlTool = byName.get('browser_get_page_url');
+    const titleTool = byName.get('browser_get_page_title');
+    const textTool = byName.get('browser_get_page_text');
+    expect(newTabTool).toBeDefined();
+    expect(navigateTool).toBeDefined();
+    expect(urlTool).toBeDefined();
+    expect(titleTool).toBeDefined();
+    expect(textTool).toBeDefined();
+    if (!newTabTool || !navigateTool || !urlTool || !titleTool || !textTool) return;
+
+    const tabResult: unknown = await newTabTool.execute({ url: 'about:blank' }, makeContext());
+    expect(newTabTool.verify?.({ url: 'about:blank' }, tabResult, makeContext())).toBe(true);
+    await navigateTool.execute(
+      { url: 'https://example.com/', tabId: 'jarvis-tab-stable' },
+      makeContext(),
+    );
+    await urlTool.execute(
+      { tabId: 'jarvis-tab-stable', expectedUrl: 'https://example.com/' },
+      makeContext(),
+    );
+    await titleTool.execute({ tabId: 'jarvis-tab-stable' }, makeContext());
+    await textTool.execute({ tabId: 'jarvis-tab-stable' }, makeContext());
+
+    expect(targetedIds).toEqual([
+      'navigate:jarvis-tab-stable',
+      'read:jarvis-tab-stable',
+      'read:jarvis-tab-stable',
+      'read:jarvis-tab-stable',
+    ]);
+  });
 });

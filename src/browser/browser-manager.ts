@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   connectViaExtension,
   listBrowsers,
@@ -53,6 +55,7 @@ export class BrowserManager {
   private connection: PlaywriterBrowserConnection | null = null;
   private currentContext: BrowserContext | null = null;
   private readonly jarvisOwnedPages = new Set<Page>();
+  private readonly pageIds = new Map<Page, string>();
   private activePage: Page | null = null;
   private selectedBrowserId: string | null = null;
   private sessionId: string | null = null;
@@ -257,7 +260,7 @@ export class BrowserManager {
 
     return metas.map(({ page, meta }, index) => ({
       index,
-      id: `tab-${String(index)}`,
+      id: this.getPageId(page),
       title: meta.title,
       url: meta.url,
       isJarvisOwned: this.jarvisOwnedPages.has(page),
@@ -285,6 +288,7 @@ export class BrowserManager {
     }
 
     this.jarvisOwnedPages.add(page);
+    this.getPageId(page);
     this.activePage = page;
 
     if (url && url !== 'about:blank') {
@@ -377,6 +381,7 @@ export class BrowserManager {
       throw asBrowserError(error, 'stale-session', 'Failed to close browser tab');
     }
     this.jarvisOwnedPages.delete(targetPage);
+    this.pageIds.delete(targetPage);
 
     const remaining = this.getPages();
     this.activePage = (await this.findResponsivePage(remaining)) ?? remaining[0] ?? null;
@@ -401,11 +406,24 @@ export class BrowserManager {
     return this.activePage;
   }
 
-  public async navigate(url: string): Promise<{ url: string; title: string; recovered: boolean }> {
+  public getPageById(id: string): Page {
+    this.ensureConnected();
+    for (const [page, pageId] of this.pageIds) {
+      if (pageId === id && !this.isPageClosed(page)) {
+        return page;
+      }
+    }
+    throw new Error(`Browser tab is unavailable: ${id}`);
+  }
+
+  public async navigate(
+    url: string,
+    tabId?: string,
+  ): Promise<{ url: string; title: string; recovered: boolean }> {
     let recovered = false;
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const page = this.getActivePage();
+      const page = tabId === undefined ? this.getActivePage() : this.getPageById(tabId);
       try {
         await withTimeout(
           page.goto(url, {
@@ -653,6 +671,15 @@ export class BrowserManager {
     }
   }
 
+  private getPageId(page: Page): string {
+    let id = this.pageIds.get(page);
+    if (id === undefined) {
+      id = `jarvis-tab-${randomUUID()}`;
+      this.pageIds.set(page, id);
+    }
+    return id;
+  }
+
   private async closeConnection(): Promise<void> {
     const connection = this.connection;
     this.connection = null;
@@ -661,6 +688,7 @@ export class BrowserManager {
     this.selectedBrowserId = null;
     this.sessionId = null;
     this.jarvisOwnedPages.clear();
+    this.pageIds.clear();
 
     if (connection) {
       try {

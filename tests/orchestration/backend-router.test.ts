@@ -43,7 +43,19 @@ function createMockAgentDesktopClient(): AgentDesktopClient {
       supported_surfaces: [],
       tracing: false,
     }),
-    listWindows: vi.fn().mockResolvedValue([]),
+    listWindows: vi.fn().mockResolvedValue([
+      {
+        id: 'w-test',
+        app_name: 'test.exe',
+        title: 'Test Window',
+        pid: 1,
+        accessible: true,
+        visible: true,
+        minimized: false,
+        is_focused: true,
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+      },
+    ]),
     snapshot: vi.fn().mockResolvedValue({ snapshot_id: 'test', tree: {} }),
   } as unknown as AgentDesktopClient;
 }
@@ -104,6 +116,39 @@ describe('BackendRouter', () => {
 
     expect(playwriter?.available).toBe(false);
     expect(vision?.available).toBe(false);
+  });
+
+  it('re-probes desktop capabilities after an accessibility snapshot failure', async () => {
+    const agentDesktop = createMockAgentDesktopClient();
+    const snapshot = vi.fn().mockRejectedValue(new Error('temporary DACL read failure'));
+    agentDesktop.snapshot = snapshot;
+    const desktopManager = createMockDesktopManager();
+    desktopManager.listWindows = vi.fn().mockResolvedValue([
+      {
+        handle: 100,
+        title: 'Notepad',
+        process_id: 1,
+        class_name: 'Notepad',
+        backend: 'uia',
+        rect: { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 },
+      },
+    ]);
+    desktopManager.getControls = vi.fn().mockResolvedValue([{ control_type: 'Document' }]);
+    const retryRouter = new BackendRouter({
+      registry: mockRegistry,
+      logger: mockLogger,
+      agentDesktopClient: agentDesktop,
+      desktopManager,
+      playwriterAvailable: () => Promise.resolve(true),
+      visionAvailable: () => Promise.resolve(true),
+    });
+
+    const first = await retryRouter.getCapabilities();
+    const second = await retryRouter.getCapabilities();
+
+    expect(first.find((capability) => capability.name === 'agent-desktop')?.available).toBe(false);
+    expect(second.find((capability) => capability.name === 'agent-desktop')?.available).toBe(false);
+    expect(snapshot).toHaveBeenCalledTimes(2);
   });
 
   it('selects backend that supports required tools', async () => {

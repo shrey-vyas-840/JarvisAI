@@ -102,6 +102,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
   };
 
   // 1. browser_list_profiles
+  const snapshotSchema = z.object({ tabId: z.string().optional() });
   tools.push({
     name: 'browser_list_profiles',
     description:
@@ -277,6 +278,8 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
         readiness: await browser.getReadiness(),
       };
     },
+    verify: (_args, output) =>
+      isRecord(output) && output.connected === true && typeof output.sessionId === 'string',
   });
 
   // 5. browser_list_tabs
@@ -339,6 +342,13 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
         tab,
       };
     },
+    verify: (_args, output) =>
+      isRecord(output) &&
+      output.created === true &&
+      isRecord(output.tab) &&
+      typeof output.tab.id === 'string' &&
+      output.tab.isJarvisOwned === true &&
+      output.tab.isCurrent === true,
   });
 
   // 7. browser_switch_tab
@@ -407,6 +417,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
   // 9. browser_navigate
   const navigateSchema = z.object({
     url: z.string().min(1).describe('The HTTP or HTTPS URL to navigate to.'),
+    tabId: z.string().optional(),
   });
   tools.push({
     name: 'browser_navigate',
@@ -421,6 +432,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
           type: 'string',
           description: 'Target HTTP or HTTPS URL.',
         },
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
       },
       required: ['url'],
     },
@@ -432,8 +444,12 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
         throw new Error(validation.error ?? 'Invalid URL');
       }
 
-      return browser.navigate(validation.sanitizedUrl);
+      return browser.navigate(validation.sanitizedUrl, args.tabId);
     },
+    verify: (args, output) =>
+      isRecord(output) &&
+      typeof output.url === 'string' &&
+      normalizeUrl(output.url) === normalizeUrl(navigateSchema.parse(args).url),
   });
 
   // 10. browser_go_back
@@ -488,10 +504,16 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
       'Retrieve the accessibility tree / ARIA snapshot of the current page. This gives the semantic structure, roles, names, and interactive elements of the webpage.',
     permission: 'read-only',
     timeoutMs: 15000,
-    parameters: { type: 'object', properties: {}, required: [] },
-    argumentsSchema: z.object({}),
-    execute: async () => {
-      const page = browser.getActivePage();
+    parameters: {
+      type: 'object',
+      properties: { tabId: { type: 'string', description: 'Stable browser tab ID to target.' } },
+      required: [],
+    },
+    argumentsSchema: snapshotSchema,
+    execute: async (rawArgs: unknown) => {
+      const args = snapshotSchema.parse(rawArgs);
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       return extractPageSnapshot(page);
     },
   });
@@ -505,6 +527,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
       .max(100000)
       .optional()
       .describe('Maximum number of characters to return (default: 30000).'),
+    tabId: z.string().optional(),
   });
   tools.push({
     name: 'browser_get_page_text',
@@ -519,15 +542,19 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
           type: 'integer',
           description: 'Maximum characters to return (default 30000).',
         },
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
       },
       required: [],
     },
     argumentsSchema: pageTextSchema,
     execute: async (rawArgs: unknown) => {
       const args = pageTextSchema.parse(rawArgs);
-      const page = browser.getActivePage();
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       return extractPageText(page, args.maxLength);
     },
+    verify: (_args, output) =>
+      isRecord(output) && typeof output.text === 'string' && output.text.length > 0,
   });
 
   // 15. browser_get_page_title
@@ -536,12 +563,20 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     description: 'Get the title of the current webpage.',
     permission: 'read-only',
     timeoutMs: 5000,
-    parameters: { type: 'object', properties: {}, required: [] },
-    argumentsSchema: z.object({}),
-    execute: async () => {
-      const page = browser.getActivePage();
+    parameters: {
+      type: 'object',
+      properties: { tabId: { type: 'string', description: 'Stable browser tab ID to target.' } },
+      required: [],
+    },
+    argumentsSchema: z.object({ tabId: z.string().optional() }),
+    execute: async (rawArgs: unknown) => {
+      const args = z.object({ tabId: z.string().optional() }).parse(rawArgs);
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       return { title: await safePageTitle(page) };
     },
+    verify: (_args, output) =>
+      isRecord(output) && typeof output.title === 'string' && output.title.trim().length > 0,
   });
 
   // 16. browser_get_page_url
@@ -550,17 +585,43 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
     description: 'Get the URL of the current webpage.',
     permission: 'read-only',
     timeoutMs: 5000,
-    parameters: { type: 'object', properties: {}, required: [] },
-    argumentsSchema: z.object({}),
-    execute: () => {
-      const page = browser.getActivePage();
+    parameters: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
+        expectedUrl: {
+          type: 'string',
+          description: 'Optional URL to verify against the read-back.',
+        },
+      },
+      required: [],
+    },
+    argumentsSchema: z.object({ tabId: z.string().optional(), expectedUrl: z.string().optional() }),
+    execute: (rawArgs: unknown) => {
+      const args = z
+        .object({ tabId: z.string().optional(), expectedUrl: z.string().optional() })
+        .parse(rawArgs);
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       return { url: page.url() };
+    },
+    verify: (rawArgs, output) => {
+      const args = z
+        .object({ tabId: z.string().optional(), expectedUrl: z.string().optional() })
+        .parse(rawArgs);
+      return (
+        isRecord(output) &&
+        typeof output.url === 'string' &&
+        (args.expectedUrl === undefined ||
+          normalizeUrl(output.url) === normalizeUrl(args.expectedUrl))
+      );
     },
   });
 
   // 17. browser_find_text
   const findTextSchema = z.object({
     query: z.string().min(1).describe('The text substring to search for on the page.'),
+    tabId: z.string().optional(),
   });
   tools.push({
     name: 'browser_find_text',
@@ -574,13 +635,15 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
           type: 'string',
           description: 'Text string to find.',
         },
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
       },
       required: ['query'],
     },
     argumentsSchema: findTextSchema,
     execute: async (rawArgs: unknown) => {
       const args = findTextSchema.parse(rawArgs);
-      const page = browser.getActivePage();
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       return findTextOnPage(page, args.query);
     },
   });
@@ -593,6 +656,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
       .describe(
         'Playwright selector, text, or accessibility locator to click (e.g. "button:has-text(\'Search\')", "a[href*=\'about\']", "text=Submit").',
       ),
+    tabId: z.string().optional(),
   });
   tools.push({
     name: 'browser_click',
@@ -607,13 +671,15 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
           type: 'string',
           description: 'Locator or CSS selector for the element to click.',
         },
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
       },
       required: ['selector'],
     },
     argumentsSchema: clickSchema,
     execute: async (rawArgs: unknown) => {
       const args = clickSchema.parse(rawArgs);
-      const page = browser.getActivePage();
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       const locator = page.locator(args.selector).first();
       await locator.click({ timeout: 10000 });
       // Brief pause to allow DOM updates
@@ -659,6 +725,7 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
   const fillFieldSchema = z.object({
     selector: z.string().min(1).describe('Locator or selector of the input field or textarea.'),
     value: z.string().describe('Value to fill into the field.'),
+    tabId: z.string().optional(),
   });
   tools.push({
     name: 'browser_fill_field',
@@ -677,13 +744,15 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
           type: 'string',
           description: 'Text value to fill.',
         },
+        tabId: { type: 'string', description: 'Stable browser tab ID to target.' },
       },
       required: ['selector', 'value'],
     },
     argumentsSchema: fillFieldSchema,
     execute: async (rawArgs: unknown) => {
       const args = fillFieldSchema.parse(rawArgs);
-      const page = browser.getActivePage();
+      const page =
+        args.tabId === undefined ? browser.getActivePage() : browser.getPageById(args.tabId);
       const locator = page.locator(args.selector).first();
 
       const type = await locator.getAttribute('type').catch(() => null);
@@ -1283,4 +1352,16 @@ export function createBrowserTools(options: BrowserToolsOptions): ToolDefinition
   });
 
   return tools;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeUrl(value: string): string {
+  try {
+    return new URL(value).href;
+  } catch {
+    return value;
+  }
 }
